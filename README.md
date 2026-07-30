@@ -1,10 +1,9 @@
 # EVM
 
-EVM is an Eiffel project manager. This repository currently implements stage 1
-from [`SPEC.md`](SPEC.md): the normalized project model, managed ECF generation,
-ISE/Gobo compiler adapters, built-in development and release modes, conditions,
-numeric toolchain constraints, and the `new`, `init`, `check`, `build`, `run`,
-`doctor`, `explain`, and `import` commands.
+EVM is an Eiffel project and dependency manager. The current implementation
+covers stages 1 and 2 from [`SPEC.md`](SPEC.md): normalized manifests, managed
+ECF generation, ISE/Gobo compiler adapters, reproducible dependency locking,
+and project-local dependency materialization.
 
 Create and build a project:
 
@@ -25,5 +24,27 @@ installation and then Gobo. Build output is isolated below
 variables. ISE normally exposes `ISE_EIFFEL` and `ISE_PLATFORM`; Gobo uses
 `GOBO`. Generated ECF files select EiffelBase for ISE and FreeELKS for Gobo.
 
-The dependency manager, materialized `.evm/` state, workspaces, full legacy
-round-tripping, and test adapters belong to later implementation stages.
+Add dependencies from supported sources:
+
+```shell
+evm add time --source ise
+evm add gobo_xml --source gobo --library xml
+evm add json@25.02
+evm add shared --path ../shared
+evm add json_git --git https://github.com/eiffelhub/json.git \
+  --branch master --ecf library/json.ecf
+```
+
+`evm add`, `remove`, and `update` keep `Eiffel.toml`, `Eiffel.lock`, and the
+managed ECF consistent. `evm install --locked` reconstructs `.evm/deps` from
+the lock file, while `--offline` forbids network access. Git packages are
+identified by full commit and tree IDs. IRON archives are kept project-local
+and verified with SHA-256; EVM does not install them into the user's global
+IRON package directory or execute package setup scripts.
+
+Use `evm deps` to inspect the graph, `evm deps <package>` to explain a path,
+and `evm clean --unused` to remove source and package state no longer reachable
+from the current lock file.
+
+Workspaces, full legacy ECF round-tripping, and test adapters belong to later
+implementation stages.

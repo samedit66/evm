@@ -8,6 +8,7 @@ from lxml import etree
 
 from evm.cli import main
 from evm.ecf import ECF_NAMESPACE
+from evm.lockfile import load_lock
 
 
 def test_new_creates_application_and_stable_ecf(tmp_path: Path, monkeypatch) -> None:
@@ -18,7 +19,10 @@ def test_new_creates_application_and_stable_ecf(tmp_path: Path, monkeypatch) -> 
 
     assert created.exit_code == 0, created.output
     assert (project / "Eiffel.toml").is_file()
-    assert (project / "Eiffel.lock").read_text() == "format-version = 1\n\npackage = []\n"
+    lock = load_lock(project / "Eiffel.lock")
+    assert lock.format_version == 1
+    assert len(lock.manifest_fingerprint) == 64
+    assert lock.packages == ()
     assert (project / "src" / "application.e").is_file()
     assert (project / "tests").is_dir()
     assert not (project / ".Eiffel.toml.tmp").exists()
@@ -134,6 +138,7 @@ def test_import_preserves_source_and_uuid(tmp_path: Path) -> None:
     manifest = (destination / "Eiffel.toml").read_text()
     assert f'uuid = "{expected_uuid}"' in manifest
     assert "ecf-managed = false" in manifest
+    assert load_lock(destination / "Eiffel.lock").packages == ()
 
 
 def test_import_rejects_application_root_without_creation_feature(

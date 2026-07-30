@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
 import re
@@ -9,8 +10,10 @@ from pathlib import Path
 
 from lxml import etree
 
+from evm.dependencies import dependency_library_locations
 from evm.errors import EvmError
 from evm.filesystem import atomic_write
+from evm.lockfile import LOCK_NAME, LockFile, ensure_lock_matches, load_lock
 from evm.model import Condition, Project, Target
 
 ECF_NAMESPACE = "http://www.eiffel.com/developers/xml/configuration-1-23-0"
@@ -21,8 +24,9 @@ _MARKER_RE = re.compile(
 _CONDITIONAL_CLUSTER_INDEX_OFFSET = 1000
 
 
-def generate_ecf(project: Project) -> bytes:
+def generate_ecf(project: Project, lock: LockFile | None = None) -> bytes:
     """Return canonical, deterministic ECF bytes for a normalized project."""
+    selected_lock = _dependency_lock(project, lock)
     root = etree.Element(
         f"{{{ECF_NAMESPACE}}}system",
         nsmap={None: ECF_NAMESPACE, "xsi": XSI_NAMESPACE},
@@ -36,9 +40,9 @@ def generate_ecf(project: Project) -> bytes:
     if project.kind == "library":
         root.set("library_target", "default")
     for target in project.targets:
-        _add_target(root, project, target)
+        _add_target(root, project, target, selected_lock)
     content = _serialize(root)
-    input_fingerprint = _project_fingerprint(project)
+    input_fingerprint = _project_fingerprint(project, selected_lock)
     content_fingerprint = hashlib.sha256(content).hexdigest()
     root.insert(
         0,
@@ -51,26 +55,46 @@ def generate_ecf(project: Project) -> bytes:
     return _serialize(root)
 
 
-def ensure_managed_ecf(project: Project, *, regenerate: bool = False) -> bool:
+def ensure_managed_ecf(
+    project: Project,
+    *,
+    regenerate: bool = False,
+    lock: LockFile | None = None,
+) -> bool:
     """Create or update managed ECF, rejecting unapproved manual changes."""
     if not project.ecf_managed:
         validate_ecf(project.ecf_path)
         return False
-    expected = generate_ecf(project)
+    expected = managed_ecf_bytes(project, regenerate=regenerate, lock=lock)
     if not project.ecf_path.exists():
         atomic_write(project.ecf_path, expected)
         return True
     existing = project.ecf_path.read_bytes()
     if existing == expected:
         return False
-    if not regenerate and not _is_untouched_managed_ecf(existing):
+    atomic_write(project.ecf_path, expected)
+    return True
+
+
+def managed_ecf_bytes(
+    project: Project,
+    *,
+    regenerate: bool = False,
+    lock: LockFile | None = None,
+) -> bytes:
+    expected = generate_ecf(project, lock)
+    if (
+        project.ecf_path.exists()
+        and project.ecf_path.read_bytes() != expected
+        and not regenerate
+        and not _is_untouched_managed_ecf(project.ecf_path.read_bytes())
+    ):
         raise EvmError(
             "managed ECF was modified outside EVM\n\n"
             "inspect:\n  evm explain --ecf-diff\n\n"
             "overwrite explicitly:\n  evm build --regenerate-ecf"
         )
-    atomic_write(project.ecf_path, expected)
-    return True
+    return expected
 
 
 def validate_ecf(path: Path) -> None:
@@ -118,8 +142,6 @@ def semantic_diff(project: Project) -> str:
         return "No semantic differences.\n"
     current_text = json.dumps(current, indent=2, sort_keys=True).splitlines()
     expected_text = json.dumps(expected, indent=2, sort_keys=True).splitlines()
-    import difflib
-
     return (
         "\n".join(
             difflib.unified_diff(
@@ -134,7 +156,12 @@ def semantic_diff(project: Project) -> str:
     )
 
 
-def _add_target(root: etree._Element, project: Project, target: Target) -> None:
+def _add_target(
+    root: etree._Element,
+    project: Project,
+    target: Target,
+    lock: LockFile | None,
+) -> None:
     attributes = {"name": target.name}
     if target.extends is not None:
         attributes["extends"] = target.extends
@@ -151,7 +178,36 @@ def _add_target(root: etree._Element, project: Project, target: Target) -> None:
     _add_conditional_externals(node, project, target)
     if target.extends is None:
         _add_runtime_libraries(node)
+    _add_dependency_libraries(node, project, target, lock)
     _add_clusters(node, project, target)
+
+
+def _add_dependency_libraries(
+    target_element: etree._Element,
+    project: Project,
+    target: Target,
+    lock: LockFile | None,
+) -> None:
+    if lock is None:
+        return
+    include_development = target.name in {"test", "development"} or any(
+        source == "tests" or source.startswith("tests/") for source in target.sources
+    )
+    for name, location in dependency_library_locations(
+        project,
+        lock,
+        include_development=include_development,
+    ):
+        package = lock.package(name)
+        if target.extends is not None and not package.development:
+            continue
+        etree.SubElement(
+            target_element,
+            f"{{{ECF_NAMESPACE}}}library",
+            name=name,
+            location=location,
+            readonly="true",
+        )
 
 
 def _add_requirements(target: etree._Element, project: Project) -> None:
@@ -295,7 +351,7 @@ def _cluster_name(target: str, source: str, index: int) -> str:
     return f"{target}_{raw}_{index}"
 
 
-def _project_fingerprint(project: Project) -> str:
+def _project_fingerprint(project: Project, lock: LockFile | None) -> str:
     value = {
         "name": project.name,
         "version": project.version,
@@ -320,9 +376,34 @@ def _project_fingerprint(project: Project) -> str:
             for item in project.conditions
         ],
         "requires": project.requires,
+        "dependencies": None
+        if lock is None
+        else [
+            {
+                "name": package.name,
+                "version": package.version,
+                "source": package.source,
+                "revision": package.revision,
+                "tree": package.tree,
+                "checksum": package.checksum,
+                "ecf": package.ecf,
+                "path": package.path,
+                "development": package.development,
+                "patched": package.patched,
+            }
+            for package in lock.packages
+        ],
     }
     encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _dependency_lock(project: Project, lock: LockFile | None) -> LockFile | None:
+    if not project.dependencies:
+        return None
+    selected = lock or load_lock(project.directory / LOCK_NAME)
+    ensure_lock_matches(project, selected)
+    return selected
 
 
 def _semantic_element(element: etree._Element) -> dict[str, object]:

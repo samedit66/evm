@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import re
 import uuid as uuid_module
 from collections.abc import Mapping
@@ -13,7 +14,7 @@ import tomlkit
 from tomlkit.exceptions import TOMLKitError
 
 from evm.errors import EvmError
-from evm.model import CompilerRequirement, Condition, Project, Root, Target
+from evm.model import CompilerRequirement, Condition, Dependency, Project, Root, Target
 from evm.versioning import NumericVersion, validate_constraint
 
 MANIFEST_NAME = "Eiffel.toml"
@@ -26,6 +27,9 @@ _TOP_LEVEL = {
     "targets",
     "conditions",
     "compiler",
+    "dependencies",
+    "dev-dependencies",
+    "patch",
 }
 _REQUIRES = {
     "standard": {"ecma", "ise"},
@@ -98,6 +102,12 @@ def parse_manifest(content: str, path: Path) -> Project:
     requires = _parse_requires(document.get("requires"))
     conditions = _parse_conditions(document.get("conditions"), {target.name for target in targets})
     compiler_arguments = _parse_compiler_arguments(document.get("compiler"))
+    dependencies = _parse_dependencies(document.get("dependencies"), development=False)
+    dependencies += _parse_dependencies(document.get("dev-dependencies"), development=True)
+    dependency_names = [dependency.name for dependency in dependencies]
+    if len(dependency_names) != len(set(dependency_names)):
+        raise EvmError("a dependency cannot appear in both dependencies and dev-dependencies")
+    dependencies = _apply_patches(dependencies, document.get("patch"))
     return Project(
         manifest_path=path.resolve(),
         name=metadata.name,
@@ -111,6 +121,7 @@ def parse_manifest(content: str, path: Path) -> Project:
         compilers=compilers,
         requires=requires,
         compiler_arguments=compiler_arguments,
+        dependencies=dependencies,
     )
 
 
@@ -357,6 +368,144 @@ def _parse_compiler_arguments(value: Any) -> dict[str, tuple[str, ...]]:
         _reject_unknown(table, {"arguments"}, f"compiler.{adapter}")
         result[adapter] = _string_list(table.get("arguments"), f"compiler.{adapter}.arguments")
     return result
+
+
+def _parse_dependencies(value: Any, *, development: bool) -> tuple[Dependency, ...]:
+    if value is None:
+        return ()
+    section = "dev-dependencies" if development else "dependencies"
+    if not isinstance(value, Mapping):
+        raise EvmError(f"{section} must be a table")
+    result: list[Dependency] = []
+    for name, raw in value.items():
+        if _NAME_RE.fullmatch(name) is None:
+            raise EvmError(f"{section}.{name} has an invalid dependency name")
+        result.append(_parse_dependency(name, raw, section, development))
+    return tuple(result)
+
+
+def _parse_dependency(
+    name: str,
+    raw: Any,
+    section: str,
+    development: bool,
+) -> Dependency:
+    path = f"{section}.{name}"
+    if isinstance(raw, str):
+        return Dependency(name=name, source="iron", version=raw, development=development)
+    if not isinstance(raw, Mapping):
+        raise EvmError(f"{path} must be a version string or inline table")
+    allowed = {
+        "source",
+        "version",
+        "git",
+        "tag",
+        "rev",
+        "branch",
+        "path",
+        "library",
+        "ecf",
+        "subdir",
+    }
+    _reject_unknown(raw, allowed, path)
+    source = _dependency_source(raw, path)
+    revision_fields = [key for key in ("tag", "rev", "branch") if key in raw]
+    if source == "git" and len(revision_fields) != 1:
+        raise EvmError(f"{path} must define exactly one of tag, rev, or branch")
+    if source != "git" and revision_fields:
+        raise EvmError(f"{path} revision constraints are only valid for Git dependencies")
+    requested_kind = revision_fields[0] if revision_fields else None
+    requested_value = (
+        _non_empty_string(raw[requested_kind], f"{path}.{requested_kind}")
+        if requested_kind
+        else None
+    )
+    version = _optional_string(raw.get("version"), f"{path}.version")
+    git = _optional_string(raw.get("git"), f"{path}.git")
+    dependency_path = _optional_string(raw.get("path"), f"{path}.path")
+    library = _optional_string(raw.get("library"), f"{path}.library")
+    ecf = _safe_relative_dependency_path(raw.get("ecf"), f"{path}.ecf")
+    subdir = _safe_relative_dependency_path(raw.get("subdir"), f"{path}.subdir")
+    if source == "git" and git is None:
+        raise EvmError(f"{path}.git is required")
+    if source == "path" and dependency_path is None:
+        raise EvmError(f"{path}.path is required")
+    if dependency_path is not None and Path(dependency_path).is_absolute():
+        raise EvmError(f"{path}.path must be relative to Eiffel.toml")
+    if source == "gobo" and library is None:
+        raise EvmError(f"{path}.library is required")
+    if source == "iron" and version is None:
+        raise EvmError(f"{path}.version is required")
+    return Dependency(
+        name=name,
+        source=source,
+        version=version,
+        git=git,
+        requested_kind=requested_kind,
+        requested_value=requested_value,
+        path=dependency_path,
+        library=library,
+        ecf=ecf,
+        subdir=subdir,
+        development=development,
+    )
+
+
+def _dependency_source(raw: Mapping[str, Any], path: str) -> str:
+    inferred = [name for name in ("git", "path") if name in raw]
+    explicit = raw.get("source")
+    if explicit is not None:
+        explicit = _non_empty_string(explicit, f"{path}.source")
+    if len(inferred) > 1 or (explicit is not None and inferred and explicit != inferred[0]):
+        raise EvmError(f"{path} defines conflicting dependency sources")
+    source = explicit or (inferred[0] if inferred else "iron")
+    if source not in {"ise", "gobo", "iron", "git", "path"}:
+        raise EvmError(f"{path}.source must be one of: ise, gobo, iron, git, path")
+    return source
+
+
+def _apply_patches(
+    dependencies: tuple[Dependency, ...],
+    value: Any,
+) -> tuple[Dependency, ...]:
+    if value is None:
+        return dependencies
+    if not isinstance(value, Mapping):
+        raise EvmError("patch must be a table")
+    by_name = {dependency.name: dependency for dependency in dependencies}
+    for name, raw in value.items():
+        if name not in by_name:
+            raise EvmError(f"patch.{name} does not match a declared dependency")
+        if not isinstance(raw, Mapping):
+            raise EvmError(f"patch.{name} must be an inline table")
+        _reject_unknown(raw, {"path"}, f"patch.{name}")
+        patched_path = _non_empty_string(raw.get("path"), f"patch.{name}.path")
+        if Path(patched_path).is_absolute():
+            raise EvmError(f"patch.{name}.path must be relative to Eiffel.toml")
+        by_name[name] = dataclasses.replace(by_name[name], patched_path=patched_path)
+    return tuple(by_name[dependency.name] for dependency in dependencies)
+
+
+def _optional_string(value: Any, path: str) -> str | None:
+    if value is None:
+        return None
+    return _non_empty_string(value, path)
+
+
+def _non_empty_string(value: Any, path: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise EvmError(f"{path} must be a non-empty string")
+    return value
+
+
+def _safe_relative_dependency_path(value: Any, path: str) -> str | None:
+    raw = _optional_string(value, path)
+    if raw is None:
+        return None
+    candidate = Path(raw)
+    if candidate.is_absolute() or ".." in candidate.parts:
+        raise EvmError(f"{path} must stay inside the dependency")
+    return candidate.as_posix()
 
 
 def _safe_project_path(base: Path, raw: str, field: str) -> Path:

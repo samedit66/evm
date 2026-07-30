@@ -14,9 +14,11 @@ from typing import Any
 
 from lxml import etree
 
+from evm.dependencies import install_dependencies
 from evm.ecf import ensure_managed_ecf, generate_ecf, parse_ecf, validate_ecf
 from evm.errors import EvmError
 from evm.filesystem import atomic_write
+from evm.lockfile import LOCK_NAME, empty_lock, load_lock, serialize_lock
 from evm.manifest import load_manifest, parse_manifest
 from evm.model import BuildRequest, Project, Root, Target
 from evm.toolchains import (
@@ -58,11 +60,11 @@ def create_project(directory: Path, *, library: bool = False, initialize: bool =
     _ensure_scaffold_available(files, initialize)
     project_uuid = str(uuid.uuid4())
     manifest = _new_manifest(name, project_uuid, library)
-    lock = "format-version = 1\n\npackage = []\n"
     source = _library_source(name) if library else _application_source()
     project = parse_manifest(manifest, directory / "Eiffel.toml")
-    ecf = generate_ecf(project)
-    _write_project_files(files, manifest, lock, ecf, source)
+    lock = empty_lock(project)
+    ecf = generate_ecf(project, lock)
+    _write_project_files(files, manifest, serialize_lock(lock), ecf, source)
     return load_manifest(files.manifest)
 
 
@@ -93,14 +95,14 @@ def _ensure_scaffold_available(files: _ProjectFiles, initialize: bool) -> None:
 def _write_project_files(
     files: _ProjectFiles,
     manifest: str,
-    lock: str,
+    lock: bytes,
     ecf: bytes,
     source: str,
 ) -> None:
     files.source.parent.mkdir(exist_ok=True)
     (files.manifest.parent / "tests").mkdir(exist_ok=True)
     atomic_write(files.manifest, manifest.encode())
-    atomic_write(files.lock, lock.encode())
+    atomic_write(files.lock, lock)
     atomic_write(files.ecf, ecf)
     atomic_write(files.source, source.encode())
     if not files.gitignore.exists():
@@ -155,11 +157,36 @@ def _source_diagnostics(
     return diagnostics
 
 
-def prepare_project(project: Project, *, regenerate: bool = False) -> bool:
+def _release_dependency_diagnostics(project: Project) -> list[str]:
+    diagnostics: list[str] = []
+    for dependency in project.dependencies:
+        if dependency.source == "path":
+            diagnostics.append(
+                f"dependency {dependency.name}: external path dependency is not allowed "
+                "in release mode"
+            )
+        if dependency.patched_path is not None:
+            diagnostics.append(
+                f"dependency {dependency.name}: local source patch is not allowed in release mode"
+            )
+    return diagnostics
+
+
+def prepare_project(
+    project: Project,
+    *,
+    regenerate: bool = False,
+    release: bool = False,
+    offline: bool = False,
+) -> bool:
     diagnostics = validate_configuration(project)
+    if release:
+        diagnostics.extend(_release_dependency_diagnostics(project))
     if diagnostics:
         raise EvmError("configuration errors:\n" + "\n".join(f"  - {item}" for item in diagnostics))
-    return ensure_managed_ecf(project, regenerate=regenerate)
+    lock = load_lock(project.directory / LOCK_NAME)
+    install_dependencies(project, offline=offline, lock=lock)
+    return ensure_managed_ecf(project, regenerate=regenerate, lock=lock)
 
 
 def compile_project(
@@ -168,7 +195,12 @@ def compile_project(
     check_only: bool = False,
 ) -> Toolchain:
     _require_target(project, request.target)
-    prepare_project(project, regenerate=request.regenerate_ecf)
+    prepare_project(
+        project,
+        regenerate=request.regenerate_ecf,
+        release=request.release,
+        offline=request.offline,
+    )
     toolchain = select_toolchain(project, request.compiler)
     build_directory = prepare_build_directory(toolchain, project, request, check_only)
     command = compiler_command(toolchain, project, request, check_only)
@@ -358,8 +390,10 @@ def import_ecf(source: Path, destination: Path) -> tuple[Project, str, list[str]
     level = "partial" if warnings else "lossless"
     destination = destination.resolve()
     manifest_path = destination / "Eiffel.toml"
-    if manifest_path.exists():
-        raise EvmError(f"refusing to overwrite existing {manifest_path}")
+    lock_path = destination / LOCK_NAME
+    existing = next((path for path in (manifest_path, lock_path) if path.exists()), None)
+    if existing is not None:
+        raise EvmError(f"refusing to overwrite existing {existing}")
     imported_project = _ImportedProject(
         name=name,
         uuid=uuid_value,
@@ -372,6 +406,7 @@ def import_ecf(source: Path, destination: Path) -> tuple[Project, str, list[str]
     destination.mkdir(parents=True, exist_ok=True)
     atomic_write(manifest_path, manifest.encode())
     project = load_manifest(manifest_path)
+    atomic_write(lock_path, serialize_lock(empty_lock(project)))
     return project, level, warnings
 
 

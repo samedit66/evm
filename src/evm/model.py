@@ -35,11 +35,28 @@ class CompilerRequirement:
 
 
 @dataclass(frozen=True)
+class Dependency:
+    name: str
+    source: str
+    version: str | None = None
+    git: str | None = None
+    requested_kind: str | None = None
+    requested_value: str | None = None
+    path: str | None = None
+    library: str | None = None
+    ecf: str | None = None
+    subdir: str | None = None
+    development: bool = False
+    patched_path: str | None = None
+
+
+@dataclass(frozen=True)
 class BuildRequest:
     compiler: str | None = None
     target: str = "default"
     release: bool = False
     regenerate_ecf: bool = False
+    offline: bool = False
 
 
 @dataclass(frozen=True)
@@ -56,6 +73,7 @@ class Project:
     compilers: tuple[CompilerRequirement, ...] = ()
     requires: tuple[tuple[str, str], ...] = ()
     compiler_arguments: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    dependencies: tuple[Dependency, ...] = ()
 
     @property
     def directory(self) -> Path:
