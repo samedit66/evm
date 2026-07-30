@@ -91,3 +91,22 @@ def test_managed_ecf_must_stay_inside_project(tmp_path: Path) -> None:
 
     with pytest.raises(EvmError, match="must stay inside"):
         load_manifest(path)
+
+
+def test_ecf_include_must_stay_inside_project(tmp_path: Path) -> None:
+    project = create_project(tmp_path / "hello")
+    path = project.manifest_path
+    path.write_text(path.read_text() + '\n[ecf]\ninclude = ["../outside.xml"]\n')
+
+    with pytest.raises(EvmError, match=r"ecf\.include\[0\] must stay inside"):
+        load_manifest(path)
+
+
+def test_release_is_a_valid_explicit_target_name(tmp_path: Path) -> None:
+    project = create_project(tmp_path / "hello")
+    path = project.manifest_path
+    path.write_text(path.read_text() + '\n[targets.release]\nextends = "default"\n')
+
+    loaded = load_manifest(path)
+
+    assert loaded.target("release").extends == "default"

@@ -1,9 +1,9 @@
 # EVM
 
 EVM is an Eiffel project and dependency manager. The current implementation
-covers stages 1 and 2 from [`SPEC.md`](SPEC.md): normalized manifests, managed
-ECF generation, ISE/Gobo compiler adapters, reproducible dependency locking,
-and project-local dependency materialization.
+covers stages 1–3 from [`SPEC.md`](SPEC.md): normalized manifests, managed ECF
+generation, ISE/Gobo compiler adapters, reproducible dependency locking,
+project-local dependency materialization, and legacy ECF compatibility.
 
 Create and build a project:
 
@@ -46,5 +46,18 @@ Use `evm deps` to inspect the graph, `evm deps <package>` to explain a path,
 and `evm clean --unused` to remove source and package state no longer reachable
 from the current lock file.
 
-Workspaces, full legacy ECF round-tripping, and test adapters belong to later
-implementation stages.
+Import an existing ECF without modifying it:
+
+```shell
+evm import legacy.ecf --destination imported
+cd imported
+evm explain --ecf-diff
+evm check --configuration-only
+```
+
+Imports report `lossless`, `lossless-with-overlay`, `partial`, or `unsupported`.
+Legacy projects keep `ecf-managed = false`; unknown but safe ECF constructs are
+retained in a validated `[ecf].include` overlay. Managed projects can use the
+same escape hatch with an `ecf-overlay` fragment for low-level target settings.
+
+Workspaces and test adapters belong to the next implementation stage.

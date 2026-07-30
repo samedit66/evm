@@ -74,6 +74,7 @@ class Project:
     requires: tuple[tuple[str, str], ...] = ()
     compiler_arguments: dict[str, tuple[str, ...]] = field(default_factory=dict)
     dependencies: tuple[Dependency, ...] = ()
+    ecf_includes: tuple[Path, ...] = ()
 
     @property
     def directory(self) -> Path:

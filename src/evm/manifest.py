@@ -30,6 +30,7 @@ _TOP_LEVEL = {
     "dependencies",
     "dev-dependencies",
     "patch",
+    "ecf",
 }
 _REQUIRES = {
     "standard": {"ecma", "ise"},
@@ -108,6 +109,7 @@ def parse_manifest(content: str, path: Path) -> Project:
     if len(dependency_names) != len(set(dependency_names)):
         raise EvmError("a dependency cannot appear in both dependencies and dev-dependencies")
     dependencies = _apply_patches(dependencies, document.get("patch"))
+    ecf_includes = _parse_ecf_includes(document.get("ecf"), path)
     return Project(
         manifest_path=path.resolve(),
         name=metadata.name,
@@ -122,6 +124,7 @@ def parse_manifest(content: str, path: Path) -> Project:
         requires=requires,
         compiler_arguments=compiler_arguments,
         dependencies=dependencies,
+        ecf_includes=ecf_includes,
     )
 
 
@@ -212,7 +215,7 @@ def _parse_targets(value: Any, project_kind: str) -> list[Target]:
         raise EvmError("targets must be a table")
     result: list[Target] = []
     for name, table in value.items():
-        if name in {"default", "release"}:
+        if name == "default":
             raise EvmError(f"targets.{name} is reserved")
         if not isinstance(table, Mapping):
             raise EvmError(f"targets.{name} must be a table")
@@ -368,6 +371,19 @@ def _parse_compiler_arguments(value: Any) -> dict[str, tuple[str, ...]]:
         _reject_unknown(table, {"arguments"}, f"compiler.{adapter}")
         result[adapter] = _string_list(table.get("arguments"), f"compiler.{adapter}.arguments")
     return result
+
+
+def _parse_ecf_includes(value: Any, manifest_path: Path) -> tuple[Path, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, Mapping):
+        raise EvmError("ecf must be a table")
+    _reject_unknown(value, {"include"}, "ecf")
+    includes = _string_list(value.get("include"), "ecf.include", required=True)
+    return tuple(
+        _safe_project_path(manifest_path.parent, include, f"ecf.include[{index}]")
+        for index, include in enumerate(includes)
+    )
 
 
 def _parse_dependencies(value: Any, *, development: bool) -> tuple[Dependency, ...]:

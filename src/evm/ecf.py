@@ -41,6 +41,9 @@ def generate_ecf(project: Project, lock: LockFile | None = None) -> bytes:
         root.set("library_target", "default")
     for target in project.targets:
         _add_target(root, project, target, selected_lock)
+    complete_overlay = _apply_ecf_includes(root, project)
+    if complete_overlay is not None:
+        return _serialize(complete_overlay)
     content = _serialize(root)
     input_fingerprint = _project_fingerprint(project, selected_lock)
     content_fingerprint = hashlib.sha256(content).hexdigest()
@@ -154,6 +157,106 @@ def semantic_diff(project: Project) -> str:
         )
         + "\n"
     )
+
+
+def _apply_ecf_includes(
+    generated_root: etree._Element,
+    project: Project,
+) -> etree._Element | None:
+    complete_overlay: etree._Element | None = None
+    for include_path in project.ecf_includes:
+        overlay_root = _parse_ecf_include(include_path)
+        if etree.QName(overlay_root).localname == "system":
+            if complete_overlay is not None or len(project.ecf_includes) != 1:
+                raise EvmError("a complete-system ECF include must be the only ecf.include")
+            if project.ecf_managed:
+                raise EvmError("a complete-system ECF include is only valid in legacy mode")
+            _validate_complete_overlay(overlay_root, project, include_path)
+            complete_overlay = overlay_root
+            continue
+        _merge_ecf_fragment(generated_root, overlay_root, include_path)
+    return complete_overlay
+
+
+def _parse_ecf_include(path: Path) -> etree._Element:
+    try:
+        data = path.read_bytes()
+    except OSError as error:
+        raise EvmError(f"cannot read ECF include {path}: {error}") from error
+    try:
+        root = etree.fromstring(
+            data,
+            parser=etree.XMLParser(resolve_entities=False, no_network=True),
+        )
+    except etree.XMLSyntaxError as error:
+        raise EvmError(f"invalid ECF include {path}: {error}") from error
+    namespace = etree.QName(root).namespace
+    if namespace != ECF_NAMESPACE:
+        raise EvmError(
+            f"unsupported ECF include namespace {namespace!r} in {path}; supported: {ECF_NAMESPACE}"
+        )
+    if etree.QName(root).localname not in {"system", "ecf-overlay"}:
+        raise EvmError(f"ECF include {path} must contain <system> or <ecf-overlay>")
+    return root
+
+
+def _validate_complete_overlay(
+    overlay: etree._Element,
+    project: Project,
+    path: Path,
+) -> None:
+    if overlay.get("name") != project.name:
+        raise EvmError(f"ECF include {path} has a system name that conflicts with project.name")
+    if overlay.get("uuid") != project.uuid:
+        raise EvmError(f"ECF include {path} has a UUID that conflicts with project.uuid")
+
+
+def _merge_ecf_fragment(
+    generated_root: etree._Element,
+    fragment: etree._Element,
+    path: Path,
+) -> None:
+    targets = {
+        target.get("name"): target
+        for target in generated_root
+        if isinstance(target.tag, str) and etree.QName(target).localname == "target"
+    }
+    for child in fragment:
+        if not isinstance(child.tag, str):
+            continue
+        if etree.QName(child).localname != "target":
+            generated_root.append(_copy_element(child))
+            continue
+        name = child.get("name")
+        if not name or name not in targets:
+            raise EvmError(f"ECF include {path} refers to unknown target {name!r}")
+        target = targets[name]
+        for attribute, value in child.attrib.items():
+            if attribute == "name":
+                continue
+            existing = target.get(attribute)
+            if attribute == "extends" and existing != value:
+                raise EvmError(
+                    f"ECF include {path} conflicts with target {name!r} attribute {attribute!r}"
+                )
+            if existing is not None and existing != value:
+                raise EvmError(
+                    f"ECF include {path} conflicts with target {name!r} attribute {attribute!r}"
+                )
+            target.set(attribute, value)
+        for target_child in child:
+            if isinstance(target_child.tag, str):
+                local_name = etree.QName(target_child).localname
+                if local_name in {"root", "cluster"}:
+                    raise EvmError(
+                        f"ECF include {path} conflicts with high-level "
+                        f"{local_name} in target {name!r}"
+                    )
+                target.append(_copy_element(target_child))
+
+
+def _copy_element(element: etree._Element) -> etree._Element:
+    return etree.fromstring(etree.tostring(element))
 
 
 def _add_target(

@@ -5,8 +5,9 @@ from pathlib import Path
 import pytest
 from lxml import etree
 
-from evm.ecf import ECF_NAMESPACE, semantic_diff, semantic_summary, validate_ecf
+from evm.ecf import ECF_NAMESPACE, generate_ecf, semantic_diff, semantic_summary, validate_ecf
 from evm.errors import EvmError
+from evm.manifest import load_manifest
 from evm.project import create_project
 
 
@@ -44,3 +45,39 @@ def test_validate_ecf_rejects_unsupported_namespace(tmp_path: Path) -> None:
 
     with pytest.raises(EvmError, match="unsupported ECF namespace"):
         validate_ecf(ecf)
+
+
+def test_ecf_fragment_include_adds_target_constructs(tmp_path: Path) -> None:
+    project = create_project(tmp_path / "hello")
+    config = project.directory / "config"
+    config.mkdir()
+    (config / "options.xml").write_text(
+        f'<ecf-overlay xmlns="{ECF_NAMESPACE}">'
+        '<target name="default"><option warning="true"/></target>'
+        "</ecf-overlay>"
+    )
+    project.manifest_path.write_text(
+        project.manifest_path.read_text() + '\n[ecf]\ninclude = ["config/options.xml"]\n'
+    )
+
+    generated = generate_ecf(load_manifest(project.manifest_path))
+
+    root = etree.fromstring(generated)
+    options = root.xpath("./*[local-name()='target']/*[local-name()='option']")
+    assert any(option.get("warning") == "true" for option in options)
+
+
+def test_ecf_fragment_rejects_high_level_conflict(tmp_path: Path) -> None:
+    project = create_project(tmp_path / "hello")
+    config = project.directory / "config"
+    config.mkdir()
+    (config / "conflict.xml").write_text(
+        f'<ecf-overlay xmlns="{ECF_NAMESPACE}">'
+        '<target name="default" extends="other"/></ecf-overlay>'
+    )
+    project.manifest_path.write_text(
+        project.manifest_path.read_text() + '\n[ecf]\ninclude = ["config/conflict.xml"]\n'
+    )
+
+    with pytest.raises(EvmError, match="conflicts with target"):
+        generate_ecf(load_manifest(project.manifest_path))

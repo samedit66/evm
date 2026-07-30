@@ -133,12 +133,140 @@ def test_import_preserves_source_and_uuid(tmp_path: Path) -> None:
     result = runner.invoke(main, ["import", str(ecf), "--destination", str(destination)])
 
     assert result.exit_code == 0, result.output
-    assert "Import level: partial" in result.output
+    assert "Import level: lossless-with-overlay" in result.output
     assert ecf.read_bytes() == before
     manifest = (destination / "Eiffel.toml").read_text()
     assert f'uuid = "{expected_uuid}"' in manifest
     assert "ecf-managed = false" in manifest
+    assert '[ecf]\ninclude = ["config/imported.ecf"]' in manifest
+    assert (destination / "config" / "imported.ecf").is_file()
     assert load_lock(destination / "Eiffel.lock").packages == ()
+
+
+def test_import_preserves_all_targets_and_unknown_ecf_constructs(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source = tmp_path / "legacy"
+    source.mkdir()
+    (source / "src").mkdir()
+    ecf = source / "legacy.ecf"
+    ecf.write_text(
+        '<?xml version="1.0"?>'
+        f'<system xmlns="{ECF_NAMESPACE}" name="legacy" '
+        'uuid="00000000-0000-4000-8000-000000000000">'
+        '<target name="default"><root class="APPLICATION" feature="make"/>'
+        '<cluster name="src" location="src"/>'
+        '<library name="custom" location="$CUSTOM/custom.ecf"/></target>'
+        '<target name="release" extends="default">'
+        '<option warning="true"/></target></system>'
+    )
+    before = ecf.read_bytes()
+    destination = tmp_path / "imported"
+
+    result = CliRunner().invoke(
+        main,
+        ["import", str(ecf), "--destination", str(destination)],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Import level: lossless-with-overlay" in result.output
+    assert "retained as opaque ECF overlay entries" in result.output
+    manifest = (destination / "Eiffel.toml").read_text()
+    assert '[targets."release"]' in manifest
+    assert 'extends = "default"' in manifest
+    assert "../legacy/src" in manifest
+    assert ecf.read_bytes() == before
+    monkeypatch.chdir(destination)
+    diff = CliRunner().invoke(main, ["explain", "--ecf-diff"])
+    assert diff.exit_code == 0, diff.output
+    assert diff.output == "No semantic differences.\n"
+    checked = CliRunner().invoke(main, ["check", "--configuration-only"])
+    assert checked.exit_code == 0, checked.output
+    assert ecf.read_bytes() == before
+
+
+def test_import_classifies_unsupported_namespace(tmp_path: Path) -> None:
+    ecf = tmp_path / "unsupported.ecf"
+    ecf.write_text(
+        '<system xmlns="https://example.invalid/ecf" name="old" '
+        'uuid="00000000-0000-4000-8000-000000000000">'
+        '<target name="default"/></system>'
+    )
+
+    result = CliRunner().invoke(
+        main,
+        ["import", str(ecf), "--destination", str(tmp_path / "imported")],
+    )
+
+    assert result.exit_code != 0
+    assert "Import level: unsupported" in result.output
+    assert not (tmp_path / "imported").exists()
+
+
+def test_import_classifies_high_level_subset_as_lossless(tmp_path: Path) -> None:
+    ecf = tmp_path / "simple.ecf"
+    ecf.write_text(
+        f'<system xmlns="{ECF_NAMESPACE}" name="simple" '
+        'uuid="00000000-0000-4000-8000-000000000000">'
+        '<target name="default"><root all_classes="true"/>'
+        '<cluster name="src" location="src" recursive="true"/></target></system>'
+    )
+    destination = tmp_path / "imported"
+
+    result = CliRunner().invoke(
+        main,
+        ["import", str(ecf), "--destination", str(destination)],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Import level: lossless\n" in result.output
+    assert not (destination / "config" / "imported.ecf").exists()
+
+
+def test_import_preserves_system_level_unknown_construct(tmp_path: Path) -> None:
+    ecf = tmp_path / "described.ecf"
+    ecf.write_text(
+        f'<system xmlns="{ECF_NAMESPACE}" name="described" '
+        'uuid="00000000-0000-4000-8000-000000000000">'
+        "<description>Legacy system</description>"
+        '<target name="default"><root all_classes="true"/>'
+        '<cluster name="src" location="src"/></target></system>'
+    )
+    destination = tmp_path / "imported"
+
+    result = CliRunner().invoke(
+        main,
+        ["import", str(ecf), "--destination", str(destination)],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Import level: lossless-with-overlay" in result.output
+    overlay = etree.parse(str(destination / "config" / "imported.ecf"))
+    descriptions = overlay.xpath("/*/*[local-name()='description']")
+    assert descriptions[0].text == "Legacy system"
+
+
+def test_import_classifies_doctype_as_partial_without_copying_it(tmp_path: Path) -> None:
+    ecf = tmp_path / "doctype.ecf"
+    ecf.write_text(
+        "<!DOCTYPE system [<!ELEMENT system ANY>]>"
+        f'<system xmlns="{ECF_NAMESPACE}" name="doctype" '
+        'uuid="00000000-0000-4000-8000-000000000000">'
+        '<target name="default"><root all_classes="true"/>'
+        '<cluster name="src" location="src"/></target></system>'
+    )
+    destination = tmp_path / "imported"
+
+    result = CliRunner().invoke(
+        main,
+        ["import", str(ecf), "--destination", str(destination)],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Import level: partial" in result.output
+    assert "document type declarations" in result.output
+    assert not (destination / "config" / "imported.ecf").exists()
 
 
 def test_import_rejects_application_root_without_creation_feature(
