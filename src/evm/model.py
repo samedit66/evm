@@ -62,6 +62,7 @@ class BuildRequest:
 @dataclass(frozen=True)
 class TestConfiguration:
     target: str
+    runner: str = "auto"
 
 
 @dataclass(frozen=True)

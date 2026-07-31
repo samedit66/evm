@@ -18,7 +18,38 @@ Test target selection follows this order:
 3. the conventional `TEST_APPLICATION.make` target when `tests/` contains
    Eiffel sources.
 
-Gobo can use `getest` when it is available.
+Select a runner explicitly when the project uses a framework:
+
+```toml
+[test]
+target = "test"
+runner = "autotest"
+```
+
+Supported runner values are `auto`, `target`, `getest`, and `autotest`.
+`auto` uses `getest` when both the executable and a matching configuration are
+present, otherwise it runs the compiled test target.
+
+EVM uses `getest` when the executable is available and the project root contains
+a matching configuration file. It prefers `getest.ge` for Gobo and `getest.ise`
+for ISE, then falls back to `getest.cfg`. Without a `getest` configuration EVM
+runs the compiled test target directly.
+
+## EiffelStudio AutoTest
+
+The `autotest` runner requires ISE EiffelStudio and discovers effective
+descendants of `EQA_TEST_SET` through compiler views. A test is an immediate
+public procedure without arguments, matching AutoTest's own definition.
+
+EVM adds the ISE `testing` library to the configured test target, generates a
+console runner and ECF under `.evm/autotest/`, and executes every selected test
+in a separate process. Project Eiffel sources and the managed ECF are not
+modified by runner generation. Existing manual, extracted, and synthesized EQA
+test sets use the same execution path.
+
+AutoTest reports `passed`, `failed`, or `unresolved`. Failed and unresolved
+tests both make `evm test` return a nonzero exit code, while the summary retains
+separate counters for the two outcomes.
 
 ## Test filters
 
@@ -29,8 +60,14 @@ $ evm test --class STRING_TESTS
 $ evm test --feature test_append
 ```
 
-Filters are adapter capabilities. If the selected runner cannot honor one,
-EVM fails explicitly rather than silently executing a broader test suite.
+With AutoTest, class and feature options are exact case-insensitive names. With
+`getest`, class and feature names are passed as anchored, escaped regular
+expressions, so each option selects exactly the requested name. The options can
+be combined to run one feature from one test class. A plain compiled test target
+has no portable filtering protocol, so EVM reports `filter unsupported` rather
+than silently executing a broader test suite.
+
+See `examples/calculator_autotest` for a complete ISE project.
 
 Other test options include:
 

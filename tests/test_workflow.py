@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 from click.testing import CliRunner
 
+from evm.autotest import AutoTestExecution
 from evm.cli import main
 from evm.errors import EvmError
 from evm.lockfile import empty_lock
@@ -179,6 +180,128 @@ sources = ["tests"]
         run_project_tests(
             project,
             WorkflowTestRequest(compiler="ise", class_name="STRING_TESTS"),
+        )
+
+
+def test_autotest_runner_reports_structured_counts(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project = parse_manifest(
+        _manifest()
+        + """
+[targets.test]
+root = "TEST_APPLICATION.make"
+sources = ["tests"]
+
+[test]
+target = "test"
+runner = "autotest"
+""",
+        tmp_path / "Eiffel.toml",
+    )
+    toolchain = Toolchain(
+        "ise",
+        Path("/tools/ec"),
+        NumericVersion.parse("25.12"),
+        "explicit",
+        "--compiler",
+    )
+    monkeypatch.setattr("evm.testing.select_toolchain", lambda project, compiler: toolchain)
+    monkeypatch.setattr(
+        "evm.testing.run_autotest",
+        lambda *arguments: AutoTestExecution(4, 2, 1, 1),
+    )
+
+    result = run_project_tests(project, WorkflowTestRequest(compiler="ise"))
+
+    assert result.status == "failed"
+    assert result.exit_code == 1
+    assert result.runner == "autotest"
+    assert result.tests == 4
+    assert result.passed == 2
+    assert result.failed == 1
+    assert result.unresolved == 1
+
+
+def test_getest_uses_matching_configuration_and_exact_filters(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project = parse_manifest(
+        _manifest()
+        + """
+[targets.test]
+root = "TEST_APPLICATION.make"
+sources = ["tests"]
+""",
+        tmp_path / "Eiffel.toml",
+    )
+    configuration = tmp_path / "getest.ge"
+    configuration.touch()
+    toolchain = Toolchain(
+        "gobo",
+        Path("/tools/gec"),
+        NumericVersion.parse("26.07"),
+        "explicit",
+        "--compiler",
+    )
+    commands: list[list[str]] = []
+    monkeypatch.setattr("evm.testing.select_toolchain", lambda project, compiler: toolchain)
+    monkeypatch.setattr("evm.testing.shutil.which", lambda executable: "/tools/getest")
+    monkeypatch.setattr("evm.testing.prepare_project", lambda *arguments, **options: None)
+    monkeypatch.setattr(
+        "evm.testing.subprocess.run",
+        lambda command, **options: commands.append(command) or SimpleNamespace(returncode=0),
+    )
+
+    result = run_project_tests(
+        project,
+        WorkflowTestRequest(
+            compiler="gobo",
+            class_name="STRING.TESTS",
+            feature="test_append+unicode",
+        ),
+    )
+
+    assert result.runner == "getest"
+    assert commands == [
+        [
+            "/tools/getest",
+            str(configuration),
+            r"--class=^STRING\.TESTS$",
+            r"--feature=^test_append\+unicode$",
+        ]
+    ]
+
+
+def test_getest_is_not_selected_without_its_configuration(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project = parse_manifest(
+        _manifest()
+        + """
+[targets.test]
+root = "TEST_APPLICATION.make"
+sources = ["tests"]
+""",
+        tmp_path / "Eiffel.toml",
+    )
+    toolchain = Toolchain(
+        "gobo",
+        Path("/tools/gec"),
+        NumericVersion.parse("26.07"),
+        "explicit",
+        "--compiler",
+    )
+    monkeypatch.setattr("evm.testing.select_toolchain", lambda project, compiler: toolchain)
+    monkeypatch.setattr("evm.testing.shutil.which", lambda executable: "/tools/getest")
+
+    with pytest.raises(EvmError, match="filter unsupported"):
+        run_project_tests(
+            project,
+            WorkflowTestRequest(compiler="gobo", feature="test_append"),
         )
 
 

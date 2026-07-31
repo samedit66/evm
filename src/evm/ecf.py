@@ -304,8 +304,29 @@ def _add_target(
     _add_conditional_externals(node, project, target)
     if target.extends is None:
         _add_runtime_libraries(node)
+    _add_autotest_library(node, project, target)
     _add_dependency_libraries(node, project, target, lock)
     _add_clusters(node, project, target)
+
+
+def _add_autotest_library(
+    target_element: etree._Element,
+    project: Project,
+    target: Target,
+) -> None:
+    if (
+        project.test is None
+        or project.test.runner != "autotest"
+        or project.test.target != target.name
+    ):
+        return
+    etree.SubElement(
+        target_element,
+        f"{{{ECF_NAMESPACE}}}library",
+        name="testing",
+        location="${ISE_LIBRARY}/library/testing/testing.ecf",
+        readonly="true",
+    )
 
 
 def _add_dependency_libraries(
@@ -483,6 +504,9 @@ def _project_fingerprint(project: Project, lock: LockFile | None) -> str:
         "version": project.version,
         "kind": project.kind,
         "uuid": project.uuid,
+        "test": None
+        if project.test is None
+        else {"target": project.test.target, "runner": project.test.runner},
         "targets": [
             {
                 "name": item.name,

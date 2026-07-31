@@ -616,6 +616,11 @@ def test_command(
             click.echo(f"Time: {result.elapsed_seconds:.2f}s")
             click.echo(f"Compiler: {result.compiler}")
             click.echo(f"Runner: {result.runner}")
+            if result.tests is not None:
+                click.echo(f"Tests: {result.tests}")
+                click.echo(f"Passed: {result.passed}")
+                click.echo(f"Failed: {result.failed}")
+                click.echo(f"Unresolved: {result.unresolved}")
     if options.output_json:
         _echo_json_result("failed" if failed_code else "passed", results)
     if failed_code:

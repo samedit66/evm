@@ -63,6 +63,7 @@ _CONDITION_WHEN_VALUES: dict[str, set[str]] = {
 }
 _CONDITION_WHEN_FIELDS = {*_CONDITION_WHEN_VALUES, "architecture"}
 _NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
+_TEST_RUNNERS = {"auto", "target", "getest", "autotest"}
 _SEMVER_RE = re.compile(
     r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
     r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
@@ -228,11 +229,15 @@ def _parse_test(value: Any, targets: list[Target]) -> TestConfiguration | None:
         return TestConfiguration("test") if "test" in target_names else None
     if not isinstance(value, Mapping):
         raise EvmError("test must be a table")
-    _reject_unknown(value, {"target"}, "test")
+    _reject_unknown(value, {"target", "runner"}, "test")
     target = _required_string(value, "target", "test.target")
     if target not in target_names:
         raise EvmError(f"test.target refers to unknown target {target!r}")
-    return TestConfiguration(target)
+    runner = value.get("runner", "auto")
+    if not isinstance(runner, str) or runner not in _TEST_RUNNERS:
+        choices = ", ".join(sorted(_TEST_RUNNERS))
+        raise EvmError(f"test.runner must be one of: {choices}")
+    return TestConfiguration(target, runner)
 
 
 def _parse_tasks(value: Any) -> tuple[Task, ...]:

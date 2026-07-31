@@ -138,3 +138,21 @@ def test_ecf_allows_same_group_names_in_different_targets(tmp_path: Path) -> Non
     targets = root.xpath("./*[local-name()='target']")
     assert len(targets) == 2
     assert all(target.xpath("./*[local-name()='library'][@name='base']") for target in targets)
+
+
+def test_autotest_target_includes_ise_testing_library(tmp_path: Path) -> None:
+    project = create_project(tmp_path / "hello")
+    project.manifest_path.write_text(
+        project.manifest_path.read_text()
+        + '\n[targets.test]\nroot = "APPLICATION.make"\nsources = ["tests"]\n'
+        + '\n[test]\ntarget = "test"\nrunner = "autotest"\n'
+    )
+
+    generated = generate_ecf(load_manifest(project.manifest_path))
+
+    root = etree.fromstring(generated)
+    testing = root.xpath(
+        "./*[local-name()='target'][@name='test']/*[local-name()='library'][@name='testing']"
+    )
+    assert len(testing) == 1
+    assert testing[0].get("location") == "${ISE_LIBRARY}/library/testing/testing.ecf"

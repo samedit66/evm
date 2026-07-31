@@ -1500,18 +1500,36 @@ evm test --compiler gobo
 ```toml
 [test]
 target = "test"
+runner = "autotest"
 ```
 
+`runner` МОЖЕТ принимать `auto`, `target`, `getest` или `autotest`. При
+отсутствии поля используется `auto`. Явный `autotest` требует ISE, а явный
+`getest` требует executable и конфигурацию `getest`.
+
 Подсистема тестирования ДОЛЖНА предоставлять абстрактные операции compile,
-discover, filter, run и normalize. Gobo-адаптер МОЖЕТ использовать `getest`;
-ISE-адаптер МОЖЕТ использовать выделенный test target или поддерживаемый
-тестовый framework. EVM НЕ ДОЛЖЕН обещать универсальный discovery протокол.
+discover, filter, run и normalize. EVM МОЖЕТ использовать `getest` с Gobo или ISE,
+если в корне проекта есть соответствующая конфигурация `getest.ge`,
+`getest.ise` или `getest.cfg`. Без такой конфигурации adapter ДОЛЖЕН запустить
+выделенный test target. EVM НЕ ДОЛЖЕН обещать универсальный discovery протокол.
 При отсутствии target `test` и секции `[test]` команда завершается понятной
 ошибкой.
+
+AutoTest-adapter ДОЛЖЕН обнаруживать effective descendants `EQA_TEST_SET` через
+семантические представления ISE compiler. Тестом является immediate procedure,
+экспортированная `ANY` и не имеющая аргументов. Adapter ДОЛЖЕН создать
+вычисляемые Eiffel root и ECF в `.evm`, НЕ изменяя пользовательские sources и
+ECF, и выполнить каждый выбранный тест через `EQA_TEST_EVALUATOR`. Результаты
+`passed`, `failed` и `unresolved` ДОЛЖНЫ сохраняться раздельно; `failed` и
+`unresolved` приводят к ненулевому exit code общего запуска.
 
 `--class` и `--feature` передаются только adapter, который объявляет поддержку
 соответствующего фильтра. В противном случае EVM ДОЛЖЕН вернуть
 `filter unsupported`, а не молча запустить все тесты.
+Для `getest` значения этих опций ДОЛЖНЫ передаваться как экранированные и
+заякоренные регулярные выражения, чтобы CLI выбирал точно одно имя.
+Для AutoTest значения являются точными регистронезависимыми именами. Отсутствие
+совпадений ДОЛЖНО быть ошибкой `no tests matched`, а не успешным пустым запуском.
 
 Минимальный итоговый формат:
 
@@ -1524,8 +1542,8 @@ Runner: getest
 ```
 
 Наличие непройденных тестов ДОЛЖНО приводить к ненулевому exit code.
-Поля Tests/Passed/Failed добавляются только когда adapter надежно получил эти
-значения от framework.
+Поля Tests/Passed/Failed/Unresolved добавляются только когда adapter надежно
+получил эти значения от framework.
 
 ### 11.6. Диагностика
 

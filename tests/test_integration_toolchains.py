@@ -10,6 +10,8 @@ from evm.dependencies import install_dependencies, resolve_dependencies
 from evm.manifest import load_manifest
 from evm.model import BuildRequest
 from evm.project import compile_project, create_project
+from evm.testing import TestRequest as WorkflowTestRequest
+from evm.testing import test_project as run_project_tests
 
 
 @pytest.mark.toolchain
@@ -73,3 +75,34 @@ def test_real_distribution_library_is_locked_and_materialized(
     assert package.version
     assert package.checksum is not None
     assert (project.directory / ".evm" / "deps" / package.materialized_name / package.ecf).is_file()
+
+
+@pytest.mark.toolchain
+@pytest.mark.integration
+def test_calculator_autotest_example_runs_with_ise(tmp_path: Path) -> None:
+    if shutil.which("ec") is None:
+        pytest.skip("ec is not installed")
+    source = Path(__file__).parents[1] / "examples" / "calculator_autotest"
+    example = tmp_path / "calculator_autotest"
+    shutil.copytree(source, example)
+    project = load_manifest(example / "Eiffel.toml")
+
+    result = run_project_tests(project, WorkflowTestRequest(compiler="ise"))
+
+    assert result.status == "passed"
+    assert result.runner == "autotest"
+    assert result.tests == 4
+    assert result.passed == 4
+
+    filtered = run_project_tests(
+        project,
+        WorkflowTestRequest(
+            compiler="ise",
+            class_name="CALCULATOR_TESTS",
+            feature="test_divide",
+        ),
+    )
+
+    assert filtered.status == "passed"
+    assert filtered.tests == 1
+    assert filtered.passed == 1

@@ -162,6 +162,9 @@ Commit `Eiffel.toml`, `Eiffel.lock`, and the managed ECF. Ignore `.evm/` and
   EiffelStudio.
 - [`json`](examples/json/) resolves a pinned GitHub library, creates a JSON
   object through its API, and prints the serialized value.
+- [`calculator_autotest`](examples/calculator_autotest/) exercises a stateless
+  calculator through ISE EiffelStudio's `EQA_TEST_SET` framework and EVM's
+  generated AutoTest console runner.
 
 ## Documentation
 

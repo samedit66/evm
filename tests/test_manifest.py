@@ -177,3 +177,31 @@ def test_release_is_a_valid_explicit_target_name(tmp_path: Path) -> None:
     loaded = load_manifest(path)
 
     assert loaded.target("release").extends == "default"
+
+
+def test_manifest_parses_explicit_autotest_runner(tmp_path: Path) -> None:
+    project = create_project(tmp_path / "hello")
+    path = project.manifest_path
+    path.write_text(
+        path.read_text()
+        + '\n[targets.test]\nroot = "APPLICATION.make"\nsources = ["tests"]\n'
+        + '\n[test]\ntarget = "test"\nrunner = "autotest"\n'
+    )
+
+    loaded = load_manifest(path)
+
+    assert loaded.test is not None
+    assert loaded.test.runner == "autotest"
+
+
+def test_manifest_rejects_unknown_test_runner(tmp_path: Path) -> None:
+    project = create_project(tmp_path / "hello")
+    path = project.manifest_path
+    path.write_text(
+        path.read_text()
+        + '\n[targets.test]\nroot = "APPLICATION.make"\nsources = ["tests"]\n'
+        + '\n[test]\ntarget = "test"\nrunner = "unknown"\n'
+    )
+
+    with pytest.raises(EvmError, match=r"test\.runner must be one of"):
+        load_manifest(path)

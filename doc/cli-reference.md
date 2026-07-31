@@ -135,6 +135,10 @@ apply only to project mode.
 
 Build and run the configured Eiffel test system.
 
+The `[test].runner` manifest field accepts `auto`, `target`, `getest`, or
+`autotest`. The AutoTest runner supports exact `--class` and `--feature`
+filtering and reports Tests, Passed, Failed, and Unresolved counters.
+
 ```text
 evm test [OPTIONS]
 

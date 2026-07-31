@@ -1,0 +1,26 @@
+[project]
+name = "calculator_autotest"
+version = "0.1.0"
+type = "application"
+uuid = "a7dc72e4-94d9-4c44-97eb-f8fa1e5651ad"
+ecf = "calculator_autotest.ecf"
+ecf-managed = true
+
+[root]
+class = "APPLICATION"
+feature = "make"
+
+[sources]
+clusters = ["src"]
+
+[targets.test]
+root = "APPLICATION.make"
+sources = ["tests"]
+extends = "default"
+
+[test]
+target = "test"
+runner = "autotest"
+
+[compatibility]
+compilers = ["ise"]
