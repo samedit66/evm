@@ -123,7 +123,7 @@ def dependency_library_locations(
         if package.ecf is None:
             continue
         if package.path is not None:
-            package_root = (project.directory / package.path).resolve()
+            package_root = (project.configuration_directory / package.path).resolve()
             location = os.path.relpath(package_root / package.ecf, project.directory)
         else:
             dependency_ecf = (
@@ -266,7 +266,7 @@ def _resolve_path(
     dependency: Dependency,
     raw_path: str,
 ) -> tuple[LockedPackage, Project | None, tuple[Dependency, ...]]:
-    root = (project.directory / raw_path).resolve()
+    root = (project.configuration_directory / raw_path).resolve()
     if not root.is_dir():
         raise EvmError(f"path dependency {dependency.name} does not exist: {raw_path}")
     nested = _load_nested_manifest(root)
@@ -451,7 +451,7 @@ def _install_package(
     offline: bool,
 ) -> None:
     if package.path is not None:
-        root = (project.directory / package.path).resolve()
+        root = (project.configuration_directory / package.path).resolve()
         if not root.is_dir():
             raise EvmError(f"path dependency {package.name} does not exist: {package.path}")
         return

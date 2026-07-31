@@ -96,14 +96,21 @@ class Project:
     test: TestConfiguration | None = None
     tasks: tuple[Task, ...] = ()
     workspace_root: Path | None = None
+    build_root: Path | None = None
+    configuration_root: Path | None = None
+    state_root: Path | None = None
 
     @property
     def directory(self) -> Path:
         return self.manifest_path.parent
 
     @property
+    def configuration_directory(self) -> Path:
+        return self.configuration_root or self.directory
+
+    @property
     def state_directory(self) -> Path:
-        return (self.workspace_root or self.directory) / ".evm"
+        return self.state_root or (self.workspace_root or self.directory) / ".evm"
 
     def target(self, name: str) -> Target:
         for target in self.targets:

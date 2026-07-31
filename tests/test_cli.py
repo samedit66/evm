@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 from lxml import etree
 
@@ -312,3 +313,40 @@ def test_doctor_command_is_not_available() -> None:
 
     assert result.exit_code != 0
     assert "No such command 'doctor'" in result.output
+
+
+def test_run_treats_leading_eiffel_files_as_script_sources(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "hello.e"
+    helper = tmp_path / "helper.e"
+    root.write_text("class HELLO end\n")
+    helper.write_text("class HELPER end\n")
+    requests = []
+
+    def run(request) -> int:
+        requests.append(request)
+        return 0
+
+    monkeypatch.setattr("evm.cli.run_script", run)
+
+    result = CliRunner().invoke(
+        main,
+        ["run", "--standalone", str(root), str(helper), "--", "input.txt", "--verbose"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert requests[0].sources == (root, helper)
+    assert requests[0].arguments == ("input.txt", "--verbose")
+    assert requests[0].standalone is True
+
+
+def test_run_rejects_project_only_target_in_file_mode(tmp_path: Path) -> None:
+    source = tmp_path / "hello.e"
+    source.write_text("class HELLO end\n")
+
+    result = CliRunner().invoke(main, ["run", "--target", "server", str(source)])
+
+    assert result.exit_code != 0
+    assert "--target is not supported in file mode" in result.output

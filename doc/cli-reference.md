@@ -87,24 +87,49 @@ Options:
 
 ## `evm run`
 
-Build and run an application. Arguments after `--` are passed to the program.
+Build and run a project application or an explicit set of Eiffel files.
+Arguments after `--` are passed to the program.
 
 ```text
-evm run [OPTIONS] [-- ARGS...]
+evm run [OPTIONS] [FILES...] [-- ARGS...]
 
 Options:
   --release               Build and run in release mode.
   --compiler TEXT         Compiler adapter ID: ise or gobo.
   --target TEXT           Target name. [default: default]
+  --offline               Forbid network access.
   --regenerate-ecf        Explicitly overwrite managed ECF.
+  --class TEXT            Root class for file mode.
+  --feature TEXT          Root creation feature for file mode.
+  --manifest FILE         Use an explicit Eiffel.toml for file mode.
+  --standalone            Ignore project context in file mode.
   --help
 ```
 
-Example:
+Project example:
 
 ```console
 $ evm run --target server -- --port 8080
 ```
+
+File examples:
+
+```console
+$ evm run hello.e
+$ evm run hello.e helper.e -- input.txt --verbose
+$ evm run --standalone --compiler gobo hello.e
+```
+
+The first file supplies the root class and the remaining files supply
+additional classes. EVM stages exactly those files and keeps the generated ECF
+and build output in `.evm/scripts/` when one project contains all files, or in
+the user cache in standalone mode. It does not create `Eiffel.toml`,
+`Eiffel.lock`, an ECF, or `build/` beside standalone source files.
+
+When all files belong to one EVM package, its manifest and lock file provide
+dependencies and compiler configuration. `--standalone` disables this lookup;
+`--manifest` selects the context explicitly. `--target` and `--regenerate-ecf`
+apply only to project mode.
 
 ## `evm test`
 

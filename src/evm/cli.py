@@ -35,6 +35,7 @@ from evm.project import (
     prepare_project,
     run_project,
 )
+from evm.scripts import ScriptRunRequest, run_script
 from evm.tasks import run_task
 from evm.testing import TestRequest, test_project
 from evm.workspace import ProjectContext, load_project_context, workspace_tree_lines
@@ -87,6 +88,19 @@ class _BuildCommandOptions:
     regenerate_ecf: bool
     package: str | None
     output_json: bool
+
+
+@dataclass(frozen=True)
+class _RunCommandOptions:
+    release: bool
+    compiler: str | None
+    target: str
+    offline: bool
+    regenerate_ecf: bool
+    class_name: str | None
+    feature: str | None
+    manifest_path: Path | None
+    standalone: bool
 
 
 def command_errors[**P, R](function: Callable[P, R]) -> Callable[P, R]:
@@ -226,27 +240,53 @@ def build_command(
 @click.option("--release", is_flag=True, help="Build and run in release mode.")
 @click.option("--compiler", type=str, help="Compiler adapter ID: ise or gobo.")
 @click.option("--target", default="default", show_default=True)
+@click.option("--offline", is_flag=True, help="Forbid network access.")
 @click.option("--regenerate-ecf", is_flag=True, help="Explicitly overwrite managed ECF.")
+@click.option("--class", "class_name", type=str, help="Root class for file mode.")
+@click.option("--feature", type=str, help="Root creation feature for file mode.")
+@click.option(
+    "--manifest",
+    "manifest_path",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="Use an explicit Eiffel.toml for file mode.",
+)
+@click.option("--standalone", is_flag=True, help="Ignore project context in file mode.")
 @click.argument("arguments", nargs=-1, type=click.UNPROCESSED)
 @command_errors
-def run_command(
-    release: bool,
-    compiler: str | None,
-    target: str,
-    regenerate_ecf: bool,
-    arguments: tuple[str, ...],
-) -> None:
-    """Build and run an application; arguments after -- go to the program."""
+def run_command(**raw_options: Any) -> None:
+    """Build and run a project or explicit Eiffel source files."""
+    options = _run_command_options(raw_options)
+    sources, program_arguments = _split_run_arguments(raw_options["arguments"])
+    if sources:
+        _validate_file_run_options(options)
+        exit_code = run_script(
+            ScriptRunRequest(
+                sources=sources,
+                arguments=program_arguments,
+                compiler=options.compiler,
+                release=options.release,
+                class_name=options.class_name,
+                feature=options.feature,
+                manifest_path=options.manifest_path,
+                standalone=options.standalone,
+                offline=options.offline,
+            )
+        )
+        if exit_code:
+            raise click.exceptions.Exit(exit_code)
+        return
+    _validate_project_run_options(options)
     project = _require_project(load_project_context())
     exit_code = run_project(
         project,
         BuildRequest(
-            compiler=compiler,
-            target=target,
-            release=release,
-            regenerate_ecf=regenerate_ecf,
+            compiler=options.compiler,
+            target=options.target,
+            release=options.release,
+            regenerate_ecf=options.regenerate_ecf,
+            offline=options.offline,
         ),
-        arguments,
+        program_arguments,
     )
     if exit_code:
         raise click.exceptions.Exit(exit_code)
@@ -647,6 +687,49 @@ def _build_command_options(values: Mapping[str, Any]) -> _BuildCommandOptions:
         package=values["package"],
         output_json=values["output_json"],
     )
+
+
+def _run_command_options(values: Mapping[str, Any]) -> _RunCommandOptions:
+    return _RunCommandOptions(
+        release=values["release"],
+        compiler=values["compiler"],
+        target=values["target"],
+        offline=values["offline"],
+        regenerate_ecf=values["regenerate_ecf"],
+        class_name=values["class_name"],
+        feature=values["feature"],
+        manifest_path=values["manifest_path"],
+        standalone=values["standalone"],
+    )
+
+
+def _split_run_arguments(arguments: tuple[str, ...]) -> tuple[tuple[Path, ...], tuple[str, ...]]:
+    source_count = 0
+    for argument in arguments:
+        if Path(argument).suffix.lower() != ".e":
+            break
+        source_count += 1
+    sources = tuple(Path(argument) for argument in arguments[:source_count])
+    return sources, arguments[source_count:]
+
+
+def _validate_file_run_options(options: _RunCommandOptions) -> None:
+    if options.target != "default":
+        raise EvmError("--target is not supported in file mode")
+    if options.regenerate_ecf:
+        raise EvmError("--regenerate-ecf is not supported in file mode")
+
+
+def _validate_project_run_options(options: _RunCommandOptions) -> None:
+    if any(
+        (
+            options.class_name is not None,
+            options.feature is not None,
+            options.manifest_path is not None,
+            options.standalone,
+        )
+    ):
+        raise EvmError("--class, --feature, --manifest, and --standalone require file mode")
 
 
 def _require_project(context: ProjectContext) -> Project:

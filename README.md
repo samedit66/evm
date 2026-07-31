@@ -76,6 +76,18 @@ Arguments after `--` are passed directly to the application:
 $ evm run -- --example-argument
 ```
 
+Eiffel files can also be run directly without creating a project:
+
+```console
+$ evm run hello.e
+$ evm run hello.e helper.e -- input.txt
+```
+
+The first file supplies the root class. EVM stages only the listed files and
+keeps its generated ECF and build artifacts in a managed cache. If every file
+belongs to one EVM project, that project's manifest and lock file provide the
+dependency context; use `--standalone` to disable project discovery.
+
 ### Create a library
 
 ```console

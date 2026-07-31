@@ -295,4 +295,5 @@ def _build_directory(
     request: BuildRequest,
 ) -> Path:
     mode = "release" if request.release else "dev"
-    return project.directory / "build" / toolchain.adapter / request.target / mode
+    root = project.build_root or project.directory / "build"
+    return root / toolchain.adapter / request.target / mode
