@@ -1,0 +1,253 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python-ci:
+    name: Python CI
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+
+      - name: Run required checks
+        run: make ci
+
+  toolchain-ci:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: EiffelStudio 25.12 on Ubuntu
+            os: ubuntu-latest
+            adapter: ise
+            version: "25.12"
+            cache-version: 25.12-98922
+          - name: EiffelStudio 25.12 on Windows
+            os: windows-latest
+            adapter: ise
+            version: "25.12"
+            cache-version: 25.12-98922
+          - name: Gobo 26.03 on Ubuntu
+            os: ubuntu-latest
+            adapter: gobo
+            version: "26.03"
+            cache-version: 26.03.05-5396cca
+          - name: Gobo 26.03 on Windows
+            os: windows-latest
+            adapter: gobo
+            version: "26.03"
+            cache-version: 26.03.05-5396cca
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+
+      - name: Restore toolchain cache
+        id: toolchain-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.tool_cache }}/evm/${{ matrix.adapter }}-${{ matrix.cache-version }}
+          key: evm-toolchain-${{ runner.os }}-${{ matrix.adapter }}-${{ matrix.cache-version }}
+
+      - name: Install EiffelStudio on Ubuntu
+        if: runner.os == 'Linux' && matrix.adapter == 'ise' && steps.toolchain-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TOOL_CACHE/evm/ise-${{ matrix.cache-version }}"
+          archive="$RUNNER_TEMP/Eiffel_25.12_rev_98922-linux-x86-64.tar.bz2"
+          mkdir -p "$root"
+          curl --fail --location --retry 3 \
+            --output "$archive" \
+            https://www.eiffel.com/cdn/EiffelStudio/25.12/98922/Eiffel_25.12_rev_98922-linux-x86-64.tar.bz2
+          echo "db26cd83844582b86293cd3b9a0caf7905e78619765724746dffa86bbdef9a6c  $archive" \
+            | sha256sum --check --strict
+          tar --extract --bzip2 --file "$archive" --directory "$root"
+
+      - name: Install EiffelStudio on Windows
+        if: runner.os == 'Windows' && matrix.adapter == 'ise' && steps.toolchain-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TOOL_CACHE "evm/ise-${{ matrix.cache-version }}"
+          $archive = Join-Path $env:RUNNER_TEMP "Eiffel_25.12_rev_98922-win64.7z"
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          curl.exe --fail --location --retry 3 `
+            --output $archive `
+            https://www.eiffel.com/cdn/EiffelStudio/25.12/98922/Eiffel_25.12_rev_98922-win64.7z
+          if ($LASTEXITCODE -ne 0) { throw "EiffelStudio download failed" }
+          $actualHash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
+          if ($actualHash -ne "2140ef769345c14859fef454f3a0ef7c19e53eb699c68ce6fe6344f11bfff14f") {
+            throw "EiffelStudio archive checksum mismatch: $actualHash"
+          }
+          7z x $archive "-o$root" -y
+          if ($LASTEXITCODE -ne 0) { throw "EiffelStudio extraction failed" }
+
+      - name: Install Gobo on Ubuntu
+        if: runner.os == 'Linux' && matrix.adapter == 'gobo' && steps.toolchain-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TOOL_CACHE/evm/gobo-${{ matrix.cache-version }}"
+          archive="$RUNNER_TEMP/gobo-linux-x86_64-26.03.05+5396cca.tar.xz"
+          mkdir -p "$root"
+          curl --fail --location --retry 3 \
+            --output "$archive" \
+            "https://github.com/gobo-eiffel/gobo/releases/download/gobo-26.03/gobo-linux-x86_64-26.03.05%2B5396cca.tar.xz"
+          echo "60d5ddcdb6e1d4ec4e4a0be303a1fda0eaf7b309d4605b3e88d7e5abeeb91d09  $archive" \
+            | sha256sum --check --strict
+          tar --extract --xz --file "$archive" --directory "$root"
+
+      - name: Install Gobo on Windows
+        if: runner.os == 'Windows' && matrix.adapter == 'gobo' && steps.toolchain-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TOOL_CACHE "evm/gobo-${{ matrix.cache-version }}"
+          $archive = Join-Path $env:RUNNER_TEMP "gobo-windows-x86_64-26.03.05+5396cca.7z"
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          curl.exe --fail --location --retry 3 `
+            --output $archive `
+            "https://github.com/gobo-eiffel/gobo/releases/download/gobo-26.03/gobo-windows-x86_64-26.03.05%2B5396cca.7z"
+          if ($LASTEXITCODE -ne 0) { throw "Gobo download failed" }
+          $actualHash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
+          if ($actualHash -ne "aa07bf8e69d0ad90cdb00cc04b64366b97208ff506057d059c86b785883eea2e") {
+            throw "Gobo archive checksum mismatch: $actualHash"
+          }
+          7z x $archive "-o$root" -y
+          if ($LASTEXITCODE -ne 0) { throw "Gobo extraction failed" }
+
+      - name: Configure EiffelStudio on Ubuntu
+        if: runner.os == 'Linux' && matrix.adapter == 'ise'
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TOOL_CACHE/evm/ise-${{ matrix.cache-version }}"
+          compiler="$(find "$root" -type f -path '*/studio/spec/linux-x86-64/bin/ec' -print -quit)"
+          test -n "$compiler"
+          ise_eiffel="${compiler%%/studio/spec/*}"
+          echo "ISE_EIFFEL=$ise_eiffel" >> "$GITHUB_ENV"
+          echo "ISE_LIBRARY=$ise_eiffel" >> "$GITHUB_ENV"
+          echo "ISE_PLATFORM=linux-x86-64" >> "$GITHUB_ENV"
+          dirname "$compiler" >> "$GITHUB_PATH"
+
+      - name: Configure EiffelStudio on Windows
+        if: runner.os == 'Windows' && matrix.adapter == 'ise'
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TOOL_CACHE "evm/ise-${{ matrix.cache-version }}"
+          $compiler = Get-ChildItem -Path $root -Recurse -File -Filter ec.exe | Select-Object -First 1
+          if ($null -eq $compiler) { throw "ec.exe was not found in $root" }
+          $iseEiffel = $compiler.Directory.Parent.Parent.Parent.Parent.FullName
+          "ISE_EIFFEL=$iseEiffel" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "ISE_LIBRARY=$iseEiffel" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "ISE_PLATFORM=win64" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "ISE_C_COMPILER=msc_vc140" | Out-File -FilePath $env:GITHUB_ENV -Append
+          $compiler.Directory.FullName | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Configure Gobo on Ubuntu
+        if: runner.os == 'Linux' && matrix.adapter == 'gobo'
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TOOL_CACHE/evm/gobo-${{ matrix.cache-version }}"
+          compiler="$(find "$root" -type f -path '*/bin/gec' -print -quit)"
+          test -n "$compiler"
+          gobo="$(dirname "$(dirname "$compiler")")"
+          echo "GOBO=$gobo" >> "$GITHUB_ENV"
+          dirname "$compiler" >> "$GITHUB_PATH"
+
+      - name: Configure Gobo on Windows
+        if: runner.os == 'Windows' && matrix.adapter == 'gobo'
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TOOL_CACHE "evm/gobo-${{ matrix.cache-version }}"
+          $compiler = Get-ChildItem -Path $root -Recurse -File -Filter gec.exe | Select-Object -First 1
+          if ($null -eq $compiler) { throw "gec.exe was not found in $root" }
+          $gobo = $compiler.Directory.Parent.FullName
+          "GOBO=$gobo" | Out-File -FilePath $env:GITHUB_ENV -Append
+          $compiler.Directory.FullName | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Configure Microsoft C compiler
+        if: runner.os == 'Windows' && matrix.adapter == 'ise'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install project dependencies
+        run: uv sync --locked --all-groups
+
+      - name: Create diagnostics directory
+        shell: bash
+        run: mkdir -p .ci
+
+      - name: Verify toolchain on Ubuntu
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ matrix.adapter }}" == "ise" ]]; then
+            ec -version 2>&1 | tee .ci/toolchain-version.txt
+          else
+            gec --version 2>&1 | tee .ci/toolchain-version.txt
+          fi
+          grep --fixed-strings "${{ matrix.version }}" .ci/toolchain-version.txt
+          uv run --frozen evm discover --json | tee .ci/discover.json
+
+      - name: Verify toolchain on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if ("${{ matrix.adapter }}" -eq "ise") {
+            $versionOutput = (& ec -version 2>&1 | Out-String)
+          } else {
+            $versionOutput = (& gec --version 2>&1 | Out-String)
+          }
+          if ($LASTEXITCODE -ne 0) { throw "Toolchain version command failed" }
+          $versionOutput | Tee-Object -FilePath .ci/toolchain-version.txt
+          if ($versionOutput -notmatch [regex]::Escape("${{ matrix.version }}")) {
+            throw "Expected toolchain version ${{ matrix.version }}"
+          }
+          uv run --frozen evm discover --json | Tee-Object -FilePath .ci/discover.json
+          if ($LASTEXITCODE -ne 0) { throw "evm discover failed" }
+
+      - name: Run real toolchain tests
+        run: uv run --frozen pytest -m "toolchain and ${{ matrix.adapter }}" -ra
+
+      - name: Upload toolchain diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: toolchain-diagnostics-${{ runner.os }}-${{ matrix.adapter }}
+          path: .ci
+          if-no-files-found: ignore

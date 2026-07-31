@@ -18,7 +18,10 @@ from evm.testing import test_project as run_project_tests
 @pytest.mark.integration
 @pytest.mark.parametrize(
     ("adapter", "executable"),
-    [("ise", "ec"), ("gobo", "gec")],
+    [
+        pytest.param("ise", "ec", marks=pytest.mark.ise),
+        pytest.param("gobo", "gec", marks=pytest.mark.gobo),
+    ],
 )
 def test_generated_application_builds_with_real_toolchain(
     tmp_path: Path,
@@ -44,8 +47,8 @@ def test_generated_application_builds_with_real_toolchain(
 @pytest.mark.parametrize(
     ("adapter", "name", "library"),
     [
-        ("ise", "time", None),
-        ("gobo", "gobo_xml", "xml"),
+        pytest.param("ise", "time", None, marks=pytest.mark.ise),
+        pytest.param("gobo", "gobo_xml", "xml", marks=pytest.mark.gobo),
     ],
 )
 def test_real_distribution_library_is_locked_and_materialized(
@@ -79,6 +82,7 @@ def test_real_distribution_library_is_locked_and_materialized(
 
 @pytest.mark.toolchain
 @pytest.mark.integration
+@pytest.mark.ise
 def test_calculator_autotest_example_runs_with_ise(tmp_path: Path) -> None:
     if shutil.which("ec") is None:
         pytest.skip("ec is not installed")

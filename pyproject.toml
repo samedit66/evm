@@ -36,6 +36,8 @@ addopts = [
 ]
 markers = [
     "integration: tests involving subprocesses and filesystem integration",
+    "gobo: tests requiring the Gobo Eiffel toolchain",
+    "ise: tests requiring the ISE Eiffel toolchain",
     "network: tests requiring external network access",
     "toolchain: tests requiring a real Eiffel toolchain",
 ]

@@ -119,9 +119,13 @@ def test_script_root_overrides_must_name_a_declared_class(tmp_path: Path) -> Non
         )
 
 
-def test_script_detects_creation_procedure_on_single_line(tmp_path: Path) -> None:
+def test_script_detects_creation_procedure_on_single_line(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     source = tmp_path / "hello.e"
     source.write_text("class HELLO create make feature make do end end\n")
+    monkeypatch.setenv("EVM_CACHE_DIR", str(tmp_path / "cache"))
 
     prepared = prepare_script(ScriptRunRequest(sources=(source,), standalone=True))
 
@@ -130,6 +134,7 @@ def test_script_detects_creation_procedure_on_single_line(tmp_path: Path) -> Non
 
 @pytest.mark.toolchain
 @pytest.mark.integration
+@pytest.mark.gobo
 def test_standalone_script_runs_with_real_gobo_toolchain(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

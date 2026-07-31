@@ -49,11 +49,26 @@ lint rules, and runs the default test suite.
 The test suite defines markers for:
 
 - `integration` — subprocess and filesystem integration;
+- `ise` — ISE Eiffel-specific toolchain integration;
+- `gobo` — Gobo Eiffel-specific toolchain integration;
 - `network` — real network access;
 - `toolchain` — a real Eiffel compiler.
 
 These tests require the corresponding external environment and are excluded
 from the normal `make test` and `make ci` selection where appropriate.
+
+Run the tests for one configured compiler explicitly:
+
+```console
+$ uv run --frozen pytest -m "toolchain and ise"
+$ uv run --frozen pytest -m "toolchain and gobo"
+```
+
+The ISE tests require `ec` in `PATH`. The Gobo tests require `gec` in `PATH`
+and `GOBO` set to the distribution directory. GitHub Actions runs both groups
+with EiffelStudio 25.12 revision 98922 and Gobo 26.03.05 on Ubuntu and Windows.
+When updating a CI toolchain, update its archive URL, expected version, SHA-256,
+and cache key together in `.github/workflows/ci.yml`.
 
 ## Design guidelines
 
