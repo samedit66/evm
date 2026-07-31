@@ -12,15 +12,22 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
+import tomlkit
 from lxml import etree
 
 from evm.dependencies import install_dependencies
 from evm.ecf import ensure_managed_ecf, generate_ecf, parse_ecf, validate_ecf
 from evm.errors import EvmError
 from evm.filesystem import atomic_write, atomic_write_many
+from evm.iron import (
+    IRON_PACKAGE_NAME,
+    iron_package_diagnostics,
+    load_iron_package,
+    select_iron_project,
+)
 from evm.lockfile import LOCK_NAME, empty_lock, load_lock, serialize_lock
 from evm.manifest import load_manifest, parse_manifest
-from evm.model import BuildRequest, Project, Root, Target
+from evm.model import BuildRequest, PackageMetadata, Project, Root, Target
 from evm.toolchains import (
     Toolchain,
     artifact_candidates,
@@ -145,6 +152,9 @@ def validate_configuration(project: Project) -> list[str]:
                 diagnostics.append(f"target {target.name}: application target has no root")
     if project.ecf_path.exists() and not project.ecf_managed:
         validate_ecf(project.ecf_path)
+    iron_path = project.directory / IRON_PACKAGE_NAME
+    if iron_path.is_file():
+        diagnostics.extend(iron_package_diagnostics(load_iron_package(iron_path), project))
     return diagnostics
 
 
@@ -377,8 +387,45 @@ def import_ecf(source: Path, destination: Path) -> tuple[Project, str, list[str]
     source = source.resolve()
     destination = destination.resolve()
     analysis = _analyze_ecf_import(source, destination)
+    return _write_import(analysis, destination)
+
+
+def import_iron(
+    source: Path,
+    destination: Path,
+    project_name: str | None = None,
+) -> tuple[Project, str, list[str]]:
+    source = source.resolve()
+    destination = destination.resolve()
+    package = load_iron_package(source)
+    ecf = select_iron_project(package, project_name, source.parent)
+    analysis = _analyze_ecf_import(ecf, destination)
+    warnings = list(analysis.warnings)
+    if package.name != analysis.project.name:
+        warnings.append(
+            f"IRON package name {package.name!r} differs from ECF system "
+            f"name {analysis.project.name!r}; using the IRON package name"
+        )
+        analysis = replace(analysis, project=replace(analysis.project, name=package.name))
+    if package.has_setup:
+        warnings.append("IRON setup declarations were not imported or executed")
+    if package.unknown_notes:
+        names = ", ".join(package.unknown_notes)
+        warnings.append(f"unsupported IRON notes were not imported: {names}")
+    imported = _write_import(analysis, destination, package.metadata)
+    level = "partial" if package.has_setup or package.unknown_notes else imported[1]
+    return imported[0], level, [*warnings]
+
+
+def _write_import(
+    analysis: _EcfImportAnalysis,
+    destination: Path,
+    metadata: PackageMetadata | None = None,
+) -> tuple[Project, str, list[str]]:
     manifest_path = destination / "Eiffel.toml"
     manifest = _imported_manifest(analysis.project)
+    if metadata is not None:
+        manifest = _add_package_metadata(manifest, metadata)
     try:
         parsed_project = parse_manifest(manifest, manifest_path)
     except EvmError as error:
@@ -394,6 +441,37 @@ def import_ecf(source: Path, destination: Path) -> tuple[Project, str, list[str]
         raise EvmError(f"refusing to overwrite existing {existing}")
     atomic_write_many(files)
     return parsed_project, analysis.level, list(analysis.warnings)
+
+
+def _add_package_metadata(manifest: str, metadata: PackageMetadata) -> str:
+    document = tomlkit.parse(manifest)
+    package = tomlkit.table()
+    for name, value in (
+        ("title", metadata.title),
+        ("description", metadata.description),
+        ("license", metadata.license),
+        ("copyright", metadata.copyright),
+    ):
+        if value is not None:
+            package.add(name, value)
+    if metadata.tags:
+        package.add("tags", list(metadata.tags))
+    if metadata.links:
+        links = tomlkit.table()
+        for link in metadata.links:
+            value = tomlkit.inline_table()
+            if link.title is not None:
+                value.add("title", link.title)
+            value.add("url", link.url)
+            links.add(link.category, value)
+        package.add("links", links)
+    if metadata.iron_maps:
+        iron = tomlkit.table()
+        iron.add("maps", list(metadata.iron_maps))
+        package.add("iron", iron)
+    if package:
+        document.add("package", package)
+    return tomlkit.dumps(document)
 
 
 def _analyze_ecf_import(source: Path, destination: Path) -> _EcfImportAnalysis:

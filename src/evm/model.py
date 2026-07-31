@@ -78,6 +78,24 @@ class Task:
 
 
 @dataclass(frozen=True)
+class PackageLink:
+    category: str
+    url: str
+    title: str | None = None
+
+
+@dataclass(frozen=True)
+class PackageMetadata:
+    title: str | None = None
+    description: str | None = None
+    license: str | None = None
+    copyright: str | None = None
+    tags: tuple[str, ...] = ()
+    links: tuple[PackageLink, ...] = ()
+    iron_maps: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class Project:
     manifest_path: Path
     name: str
@@ -95,6 +113,7 @@ class Project:
     ecf_includes: tuple[Path, ...] = ()
     test: TestConfiguration | None = None
     tasks: tuple[Task, ...] = ()
+    package: PackageMetadata | None = None
     workspace_root: Path | None = None
     build_root: Path | None = None
     configuration_root: Path | None = None

@@ -23,6 +23,8 @@ from evm.dependency_commands import (
 from evm.discovery import discover_environment, discovery_lines
 from evm.ecf import semantic_diff
 from evm.errors import EvmError
+from evm.filesystem import atomic_write
+from evm.iron import IRON_PACKAGE_NAME, serialize_iron_package
 from evm.lockfile import LOCK_NAME, load_lock
 from evm.model import BuildRequest, Dependency, Project
 from evm.project import (
@@ -32,6 +34,7 @@ from evm.project import (
     effective_sources,
     explain_data,
     import_ecf,
+    import_iron,
     prepare_project,
     run_project,
 )
@@ -385,7 +388,8 @@ def explain_command(
 
 
 @main.command("import")
-@click.argument("ecf", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.argument("source", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--project", "project_name", type=str, help="Select an ECF from package.iron.")
 @click.option(
     "--destination",
     type=click.Path(file_okay=False, path_type=Path),
@@ -393,15 +397,55 @@ def explain_command(
     show_default=True,
 )
 @command_errors
-def import_command(ecf: Path, destination: Path) -> None:
-    """Create an initial manifest from an existing ECF without changing it."""
-    project, level, warnings = import_ecf(ecf, destination)
+def import_command(source: Path, project_name: str | None, destination: Path) -> None:
+    """Create an initial manifest from an ECF or package.iron."""
+    if source.name == IRON_PACKAGE_NAME:
+        project, level, warnings = import_iron(source, destination, project_name)
+    else:
+        if project_name is not None:
+            raise EvmError("--project is only valid when importing package.iron")
+        project, level, warnings = import_ecf(source, destination)
     click.echo(f"Import level: {level}")
     click.echo(f"Created: {project.manifest_path}")
     if warnings:
         click.echo("Warnings:")
         for warning in warnings:
             click.echo(f"  {warning}")
+
+
+@main.group("iron")
+def iron_group() -> None:
+    """Interoperate with the IRON package format."""
+
+
+@iron_group.command("export")
+@click.option("--output", type=click.Path(dir_okay=False, path_type=Path))
+@click.option("--check", "check_only", is_flag=True, help="Check without writing the file.")
+@click.option("--force", is_flag=True, help="Overwrite a different existing file.")
+@click.option("--package", "package_name", type=str, help="Select a workspace package.")
+@command_errors
+def iron_export_command(
+    output: Path | None,
+    check_only: bool,
+    force: bool,
+    package_name: str | None,
+) -> None:
+    """Create package.iron from Eiffel.toml."""
+    if check_only and force:
+        raise EvmError("--check and --force are mutually exclusive")
+    project = _selected_project(load_project_context(), package_name)
+    destination = (output or project.directory / IRON_PACKAGE_NAME).resolve()
+    content = serialize_iron_package(project)
+    existing = destination.read_bytes() if destination.is_file() else None
+    if existing == content:
+        click.echo(f"Current: {destination}")
+        return
+    if check_only:
+        raise EvmError(f"{destination} is missing or out of date")
+    if existing is not None and not force:
+        raise EvmError(f"refusing to overwrite different {destination}; use --force")
+    atomic_write(destination, content)
+    click.echo(f"Created: {destination}")
 
 
 @main.command("add")
@@ -736,6 +780,14 @@ def _require_project(context: ProjectContext) -> Project:
     if context.project is not None:
         return context.project
     raise EvmError("this command requires a package; run it inside a workspace member")
+
+
+def _selected_project(context: ProjectContext, name: str | None) -> Project:
+    if name is not None:
+        if context.workspace is None:
+            raise EvmError("--package requires a workspace")
+        return context.workspace.package(name)
+    return _require_project(context)
 
 
 def _command_projects(

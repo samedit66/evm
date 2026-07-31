@@ -78,6 +78,34 @@ the default target, development and release modes, compiler selection, local
 package layout, and a conventional test target when explicit configuration is
 unnecessary.
 
+## IRON package metadata
+
+Projects intended for IRON publication can keep metadata in `Eiffel.toml`:
+
+```toml
+[package]
+title = "Example library"
+description = "Reusable Eiffel components."
+license = "MIT"
+tags = ["example", "library"]
+
+[package.links]
+source = { title = "Source", url = "https://example.com/source" }
+
+[package.iron]
+maps = ["/example/library"]
+```
+
+Generate or verify the IRON interoperability file explicitly:
+
+```console
+$ evm iron export
+$ evm iron export --check
+```
+
+`Eiffel.toml` remains authoritative. EVM validates an existing `package.iron`
+during configuration checks but does not read dependencies from it.
+
 ## Check and explain
 
 Validate configuration without invoking an Eiffel compiler:

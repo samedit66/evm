@@ -184,18 +184,39 @@ combined.
 
 ## `evm import`
 
-Create an initial manifest from an existing ECF without changing it.
+Create an initial manifest from an existing ECF or `package.iron` without
+changing the source.
 
 ```text
-evm import [OPTIONS] ECF
+evm import [OPTIONS] SOURCE
 
 Options:
+  --project TEXT             Select an ECF from package.iron.
   --destination DIRECTORY    Destination directory. [default: .]
   --help
 ```
 
 The result is classified as `lossless`, `lossless-with-overlay`, `partial`, or
-`unsupported`.
+`unsupported`. Importing an IRON package with multiple ECF entries requires
+`--project`. IRON `setup` declarations are reported but never executed.
+
+## `evm iron export`
+
+Create a deterministic `package.iron` from the selected EVM package.
+
+```text
+evm iron export [OPTIONS]
+
+Options:
+  --output FILE       Write to a different path.
+  --check             Check without writing the file.
+  --force             Overwrite a different existing file.
+  --package TEXT      Select a workspace package.
+  --help
+```
+
+`--check` and `--force` are mutually exclusive. Dependencies remain
+authoritative in `Eiffel.toml` and are not copied into `package.iron`.
 
 ## `evm add`
 

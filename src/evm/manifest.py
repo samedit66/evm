@@ -20,6 +20,8 @@ from evm.model import (
     CompilerRequirement,
     Condition,
     Dependency,
+    PackageLink,
+    PackageMetadata,
     Project,
     Root,
     Target,
@@ -46,6 +48,7 @@ _TOP_LEVEL = {
     "test",
     "scripts",
     "workspace",
+    "package",
 }
 _REQUIRES = {
     "standard": {"ecma", "ise"},
@@ -139,6 +142,7 @@ def parse_manifest(content: str, path: Path) -> Project:
     dependencies = _apply_patches(dependencies, document.get("patch"))
     ecf_includes = _parse_ecf_includes(document.get("ecf"), path)
     tasks = _parse_tasks(document.get("scripts"))
+    package = _parse_package_metadata(document.get("package"))
     _validate_task_references(tasks)
     _parse_workspace_members(document.get("workspace"), path)
     return Project(
@@ -158,7 +162,64 @@ def parse_manifest(content: str, path: Path) -> Project:
         ecf_includes=ecf_includes,
         test=test,
         tasks=tasks,
+        package=package,
     )
+
+
+def _parse_package_metadata(value: Any) -> PackageMetadata | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise EvmError("package must be a table")
+    _reject_unknown(
+        value,
+        {"title", "description", "license", "copyright", "tags", "links", "iron"},
+        "package",
+    )
+    links = _parse_package_links(value.get("links"))
+    iron = value.get("iron")
+    if iron is None:
+        iron_maps: tuple[str, ...] = ()
+    else:
+        if not isinstance(iron, Mapping):
+            raise EvmError("package.iron must be a table")
+        _reject_unknown(iron, {"maps"}, "package.iron")
+        iron_maps = _string_list(iron.get("maps"), "package.iron.maps")
+    return PackageMetadata(
+        title=_optional_string(value.get("title"), "package.title"),
+        description=_optional_string(value.get("description"), "package.description"),
+        license=_optional_string(value.get("license"), "package.license"),
+        copyright=_optional_string(value.get("copyright"), "package.copyright"),
+        tags=_string_list(value.get("tags"), "package.tags"),
+        links=links,
+        iron_maps=iron_maps,
+    )
+
+
+def _parse_package_links(value: Any) -> tuple[PackageLink, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, Mapping):
+        raise EvmError("package.links must be a table")
+    links: list[PackageLink] = []
+    for category, raw in value.items():
+        path = f"package.links.{category}"
+        if not isinstance(category, str) or not category:
+            raise EvmError("package link categories must be non-empty strings")
+        if isinstance(raw, str):
+            links.append(PackageLink(category, _non_empty_string(raw, path)))
+            continue
+        if not isinstance(raw, Mapping):
+            raise EvmError(f"{path} must be a URL string or table")
+        _reject_unknown(raw, {"title", "url"}, path)
+        links.append(
+            PackageLink(
+                category,
+                _required_string(raw, "url", f"{path}.url"),
+                _optional_string(raw.get("title"), f"{path}.title"),
+            )
+        )
+    return tuple(links)
 
 
 def _parse_test(value: Any, targets: list[Target]) -> TestConfiguration | None:
