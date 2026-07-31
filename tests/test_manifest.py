@@ -120,6 +120,21 @@ def test_target_inheritance_is_normalized(tmp_path: Path) -> None:
     assert validate_configuration(loaded) == []
 
 
+def test_manifest_uses_declared_default_target(tmp_path: Path) -> None:
+    project = create_project(tmp_path / "hello")
+    path = project.manifest_path
+    path.write_text(
+        path.read_text()
+        .replace("ecf-managed = true\n", 'ecf-managed = true\ndefault-target = "app"\n')
+        .replace('extends = "default"', 'extends = "app"')
+    )
+
+    loaded = load_manifest(path)
+
+    assert loaded.default_target == "app"
+    assert loaded.target("app").sources == ("src",)
+
+
 def test_target_cycle_is_rejected(tmp_path: Path) -> None:
     project = create_project(tmp_path / "hello")
     path = project.manifest_path

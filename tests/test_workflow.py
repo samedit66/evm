@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 from click.testing import CliRunner
 
-from evm.autotest import AutoTestExecution
+from evm.autotest import AutoTestCase, AutoTestDiagnostic, AutoTestExecution
 from evm.cli import main
 from evm.errors import EvmError
 from evm.lockfile import empty_lock
@@ -15,6 +15,7 @@ from evm.manifest import parse_manifest
 from evm.model import Project, Task, TaskStep
 from evm.tasks import run_task
 from evm.testing import TestRequest as WorkflowTestRequest
+from evm.testing import _find_assertion_line
 from evm.testing import test_project as run_project_tests
 from evm.toolchains import Toolchain
 from evm.versioning import NumericVersion
@@ -142,9 +143,19 @@ sources = ["tests"]
         "evm.testing.artifact_candidates",
         lambda toolchain, project, request: (executable,),
     )
+    process_options = []
     monkeypatch.setattr(
         "evm.testing.subprocess.run",
-        lambda *arguments, **options: SimpleNamespace(returncode=7),
+        lambda *arguments, **options: (
+            process_options.append(options)
+            or SimpleNamespace(
+                returncode=7,
+                stdout=(
+                    "failure at TEST_APPLICATION.make:12\n" if options["capture_output"] else None
+                ),
+                stderr="runtime stack trace\n" if options["capture_output"] else None,
+            )
+        ),
     )
 
     result = run_project_tests(project, WorkflowTestRequest(compiler="ise"))
@@ -152,6 +163,17 @@ sources = ["tests"]
     assert result.status == "failed"
     assert result.exit_code == 7
     assert result.runner == "test-target"
+    assert result.stdout == "failure at TEST_APPLICATION.make:12\n"
+    assert result.stderr == "runtime stack trace\n"
+    assert result.as_dict()["stdout"] == "failure at TEST_APPLICATION.make:12\n"
+
+    raw_result = run_project_tests(
+        project,
+        WorkflowTestRequest(compiler="ise", raw=True),
+    )
+
+    assert raw_result.exit_code == 7
+    assert process_options[-1]["capture_output"] is False
 
 
 def test_test_filter_is_rejected_when_adapter_cannot_apply_it(
@@ -187,6 +209,19 @@ def test_autotest_runner_reports_structured_counts(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    tests_directory = tmp_path / "tests"
+    tests_directory.mkdir()
+    (tests_directory / "legacy_suite.e").write_text(
+        """class STRING_TESTS
+inherit EQA_TEST_SET
+feature
+    test_failure
+        do
+            assert ("expected_value", False)
+        end
+end
+"""
+    )
     project = parse_manifest(
         _manifest()
         + """
@@ -210,7 +245,27 @@ runner = "autotest"
     monkeypatch.setattr("evm.testing.select_toolchain", lambda project, compiler: toolchain)
     monkeypatch.setattr(
         "evm.testing.run_autotest",
-        lambda *arguments: AutoTestExecution(4, 2, 1, 1),
+        lambda *arguments: AutoTestExecution(
+            4,
+            2,
+            1,
+            1,
+            diagnostics=(
+                AutoTestDiagnostic(
+                    AutoTestCase("STRING_TESTS", "test_failure"),
+                    "failed",
+                    assertion="expected_value",
+                    exception_tag="assertion violated",
+                    stderr="runtime diagnostic",
+                    trace="trace line",
+                    trace_valid=True,
+                ),
+                AutoTestDiagnostic(
+                    AutoTestCase("STRING_TESTS", "test_unresolved"),
+                    "unresolved",
+                ),
+            ),
+        ),
     )
 
     result = run_project_tests(project, WorkflowTestRequest(compiler="ise"))
@@ -222,6 +277,27 @@ runner = "autotest"
     assert result.passed == 2
     assert result.failed == 1
     assert result.unresolved == 1
+    assert result.failed_tests == ("STRING_TESTS.test_failure",)
+    assert result.unresolved_tests == ("STRING_TESTS.test_unresolved",)
+    assert result.as_dict()["failed_tests"] == ["STRING_TESTS.test_failure"]
+    assert result.as_dict()["test_details"][0]["assertion"] == "expected_value"
+    assert result.as_dict()["test_details"][0]["exception_tag"] == "assertion violated"
+    assert result.as_dict()["test_details"][0]["stderr"] == "runtime diagnostic"
+    assert result.details[0].source_path == "tests/legacy_suite.e"
+    assert result.details[0].source_line == 6
+    assert result.details[0].source_text == 'assert ("expected_value", False)'
+
+
+def test_assertion_source_line_requires_a_unique_literal_tag() -> None:
+    lines = [
+        'assert ("same_tag", first)',
+        'assert ("unique_tag", value)',
+        'assert ("same_tag", second)',
+    ]
+
+    assert _find_assertion_line(lines, "unique_tag") == 2
+    assert _find_assertion_line(lines, "same_tag") is None
+    assert _find_assertion_line(lines, None) is None
 
 
 def test_getest_uses_matching_configuration_and_exact_filters(
@@ -247,12 +323,21 @@ sources = ["tests"]
         "--compiler",
     )
     commands: list[list[str]] = []
+    process_options = []
     monkeypatch.setattr("evm.testing.select_toolchain", lambda project, compiler: toolchain)
     monkeypatch.setattr("evm.testing.shutil.which", lambda executable: "/tools/getest")
     monkeypatch.setattr("evm.testing.prepare_project", lambda *arguments, **options: None)
     monkeypatch.setattr(
         "evm.testing.subprocess.run",
-        lambda command, **options: commands.append(command) or SimpleNamespace(returncode=0),
+        lambda command, **options: (
+            commands.append(command)
+            or process_options.append(options)
+            or SimpleNamespace(
+                returncode=0,
+                stdout="3 tests, 3 passed\n" if options["capture_output"] else None,
+                stderr="" if options["capture_output"] else None,
+            )
+        ),
     )
 
     result = run_project_tests(
@@ -265,6 +350,7 @@ sources = ["tests"]
     )
 
     assert result.runner == "getest"
+    assert result.stdout == "3 tests, 3 passed\n"
     assert commands == [
         [
             "/tools/getest",
@@ -273,6 +359,14 @@ sources = ["tests"]
             r"--feature=^test_append\+unicode$",
         ]
     ]
+
+    raw_result = run_project_tests(
+        project,
+        WorkflowTestRequest(compiler="gobo", raw=True),
+    )
+
+    assert raw_result.runner == "getest"
+    assert process_options[-1]["capture_output"] is False
 
 
 def test_getest_is_not_selected_without_its_configuration(

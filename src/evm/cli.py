@@ -40,7 +40,7 @@ from evm.project import (
 )
 from evm.scripts import ScriptRunRequest, run_script
 from evm.tasks import run_task
-from evm.testing import TestRequest, test_project
+from evm.testing import TestDiagnostic, TestRequest, TestResult, test_project
 from evm.workspace import ProjectContext, load_project_context, workspace_tree_lines
 
 
@@ -69,6 +69,8 @@ class _TestCommandOptions:
     regenerate_ecf: bool
     package: str | None
     output_json: bool
+    trace: bool
+    raw: bool
 
 
 @dataclass(frozen=True)
@@ -76,7 +78,7 @@ class _CheckCommandOptions:
     configuration_only: bool
     release: bool
     compiler: str | None
-    target: str
+    target: str | None
     regenerate_ecf: bool
     package: str | None
     output_json: bool
@@ -86,7 +88,7 @@ class _CheckCommandOptions:
 class _BuildCommandOptions:
     release: bool
     compiler: str | None
-    target: str
+    target: str | None
     offline: bool
     regenerate_ecf: bool
     package: str | None
@@ -97,7 +99,7 @@ class _BuildCommandOptions:
 class _RunCommandOptions:
     release: bool
     compiler: str | None
-    target: str
+    target: str | None
     offline: bool
     regenerate_ecf: bool
     class_name: str | None
@@ -153,6 +155,10 @@ def new_command(path: Path, library: bool) -> None:
 @command_errors
 def init_command(library: bool) -> None:
     """Initialize the current directory without overwriting files."""
+    existing_ecfs = sorted(Path.cwd().glob("*.ecf"))
+    if existing_ecfs and not (Path.cwd() / "Eiffel.toml").exists():
+        choices = "\n".join(f"  evm import {path.name}" for path in existing_ecfs)
+        raise EvmError(f"existing Eiffel project detected\n\nimport it with:\n{choices}")
     project = create_project(Path.cwd(), library=library, initialize=True)
     click.echo(f"Initialized {project.kind} project {project.name!r}")
 
@@ -161,7 +167,7 @@ def init_command(library: bool) -> None:
 @click.option("--configuration-only", is_flag=True, help="Do not invoke an Eiffel compiler.")
 @click.option("--release", is_flag=True, help="Check the release mode.")
 @click.option("--compiler", type=str, help="Compiler adapter ID: ise or gobo.")
-@click.option("--target", default="default", show_default=True)
+@click.option("--target", help="Target name; defaults to project.default-target.")
 @click.option("--regenerate-ecf", is_flag=True, help="Explicitly overwrite managed ECF.")
 @click.option("--package", type=str, help="Limit a workspace command to one package.")
 @click.option("--json", "output_json", is_flag=True, help="Emit stable JSON for CI.")
@@ -187,7 +193,7 @@ def check_command(
                 project,
                 BuildRequest(
                     compiler=options.compiler,
-                    target=options.target,
+                    target=options.target or project.default_target,
                     release=options.release,
                     regenerate_ecf=options.regenerate_ecf,
                 ),
@@ -204,7 +210,7 @@ def check_command(
 @main.command("build")
 @click.option("--release", is_flag=True, help="Build in release mode.")
 @click.option("--compiler", type=str, help="Compiler adapter ID: ise or gobo.")
-@click.option("--target", default="default", show_default=True)
+@click.option("--target", help="Target name; defaults to project.default-target.")
 @click.option("--offline", is_flag=True, help="Forbid network access.")
 @click.option("--regenerate-ecf", is_flag=True, help="Explicitly overwrite managed ECF.")
 @click.option("--package", type=str, help="Limit a workspace build to one package.")
@@ -222,7 +228,7 @@ def build_command(
             project,
             BuildRequest(
                 compiler=options.compiler,
-                target=options.target,
+                target=options.target or project.default_target,
                 release=options.release,
                 regenerate_ecf=options.regenerate_ecf,
                 offline=options.offline,
@@ -242,7 +248,7 @@ def build_command(
 )
 @click.option("--release", is_flag=True, help="Build and run in release mode.")
 @click.option("--compiler", type=str, help="Compiler adapter ID: ise or gobo.")
-@click.option("--target", default="default", show_default=True)
+@click.option("--target", help="Target name; defaults to project.default-target.")
 @click.option("--offline", is_flag=True, help="Forbid network access.")
 @click.option("--regenerate-ecf", is_flag=True, help="Explicitly overwrite managed ECF.")
 @click.option("--class", "class_name", type=str, help="Root class for file mode.")
@@ -284,7 +290,7 @@ def run_command(**raw_options: Any) -> None:
         project,
         BuildRequest(
             compiler=options.compiler,
-            target=options.target,
+            target=options.target or project.default_target,
             release=options.release,
             regenerate_ecf=options.regenerate_ecf,
             offline=options.offline,
@@ -309,7 +315,7 @@ def discover_command(output_json: bool) -> None:
 
 @main.command("explain")
 @click.option("--targets", "show_targets", is_flag=True, help="List effective targets.")
-@click.option("--target", default="default", show_default=True)
+@click.option("--target", help="Target name; defaults to project.default-target.")
 @click.option("--release", is_flag=True, help="Explain release mode.")
 @click.option("--compiler", type=str, help="Compiler adapter ID: ise or gobo.")
 @click.option("--json", "output_mode", flag_value="json", help="Emit stable JSON.")
@@ -322,7 +328,7 @@ def discover_command(output_json: bool) -> None:
 @command_errors
 def explain_command(
     show_targets: bool,
-    target: str,
+    target: str | None,
     release: bool,
     compiler: str | None,
     output_mode: str | None,
@@ -362,7 +368,12 @@ def explain_command(
             sources = ", ".join(effective_sources(project, item.name))
             click.echo(f"{item.name}\t{root_text}\t{sources}")
         return
-    data = explain_data(project, target=target, release=release, compiler=compiler)
+    data = explain_data(
+        project,
+        target=target or project.default_target,
+        release=release,
+        compiler=compiler,
+    )
     if output_mode == "json":
         click.echo(json.dumps(data, indent=2, sort_keys=True))
         return
@@ -406,7 +417,10 @@ def import_command(source: Path, project_name: str | None, destination: Path) ->
             raise EvmError("--project is only valid when importing package.iron")
         project, level, warnings = import_ecf(source, destination)
     click.echo(f"Import level: {level}")
-    click.echo(f"Created: {project.manifest_path}")
+    click.echo(f"Default target: {project.default_target}")
+    click.echo("Created:")
+    click.echo(f"  {project.manifest_path}")
+    click.echo(f"  {project.directory / LOCK_NAME}")
     if warnings:
         click.echo("Warnings:")
         for warning in warnings:
@@ -584,12 +598,16 @@ def deps_command(package: str | None, show_workspace: bool) -> None:
 @click.option("--regenerate-ecf", is_flag=True, help="Explicitly overwrite managed ECF.")
 @click.option("--package", type=str, help="Limit a workspace test to one package.")
 @click.option("--json", "output_json", is_flag=True, help="Emit stable JSON for CI.")
+@click.option("--trace", is_flag=True, help="Show complete normalized failure diagnostics.")
+@click.option("--raw", is_flag=True, help="Pass through the test runner's native output.")
 @command_errors
 def test_command(
     **raw_options: Any,
 ) -> None:
     """Build and run a configured Eiffel test system."""
     options = _test_command_options(raw_options)
+    if sum((options.output_json, options.trace, options.raw)) > 1:
+        raise EvmError("--json, --trace, and --raw are mutually exclusive")
     projects = _command_projects(load_project_context(), options.package)
     results: list[dict[str, object]] = []
     failed_code = 0
@@ -603,28 +621,114 @@ def test_command(
                 feature=options.feature,
                 offline=options.offline,
                 regenerate_ecf=options.regenerate_ecf,
-                capture_output=options.output_json,
+                raw=options.raw,
             ),
         )
         data = {"package": project.name, **result.as_dict()}
         results.append(data)
         failed_code = failed_code or result.exit_code
-        if not options.output_json:
-            click.echo(f"Package: {project.name}")
-            click.echo(f"Status: {result.status}")
-            click.echo(f"Exit code: {result.exit_code}")
-            click.echo(f"Time: {result.elapsed_seconds:.2f}s")
-            click.echo(f"Compiler: {result.compiler}")
-            click.echo(f"Runner: {result.runner}")
-            if result.tests is not None:
-                click.echo(f"Tests: {result.tests}")
-                click.echo(f"Passed: {result.passed}")
-                click.echo(f"Failed: {result.failed}")
-                click.echo(f"Unresolved: {result.unresolved}")
+        if not options.output_json and not options.raw:
+            if options.trace:
+                _print_trace_test_result(project.name, result)
+            else:
+                _print_concise_test_result(project.name, result)
     if options.output_json:
         _echo_json_result("failed" if failed_code else "passed", results)
     if failed_code:
         raise click.exceptions.Exit(failed_code)
+
+
+def _print_test_diagnostics(diagnostics: tuple[TestDiagnostic, ...]) -> None:
+    for status, heading in (("failed", "Failed tests"), ("unresolved", "Unresolved tests")):
+        selected = tuple(item for item in diagnostics if item.status == status)
+        if not selected:
+            continue
+        click.echo(f"{heading}:")
+        for detail in selected:
+            click.echo(f"  {detail.name}")
+            for label, value in (
+                ("Assertion", detail.assertion),
+                ("Exception class", detail.exception_class),
+                ("Exception feature", detail.exception_feature),
+                ("Exception code", detail.exception_code),
+                ("Exception tag", detail.exception_tag),
+                ("Breakpoint slot", detail.breakpoint_slot),
+                ("Test invalid", detail.test_invalid),
+                ("Trace valid", detail.trace_valid),
+                ("Output", detail.output),
+                ("Standard error", detail.stderr),
+                ("Trace", detail.trace),
+            ):
+                if value is not None:
+                    _print_test_detail(label, str(value))
+
+
+def _print_concise_test_result(package: str, result: TestResult) -> None:
+    click.echo(f"Package: {package}")
+    for detail in result.details:
+        heading = "FAILED" if detail.status == "failed" else "UNRESOLVED"
+        click.echo(f"\n{heading} {detail.name}")
+        if detail.source_path is not None:
+            location = detail.source_path
+            if detail.source_line is not None:
+                location += f":{detail.source_line}"
+            click.echo(location)
+        if detail.source_text is not None:
+            click.echo(f"    {detail.source_text}")
+        if detail.assertion is not None:
+            click.echo(f"    Assertion failed: {detail.assertion}")
+        elif detail.exception_tag is not None:
+            click.echo(f"    Exception: {detail.exception_tag}")
+        if detail.output is not None:
+            _print_test_detail("Captured output", detail.output)
+        if detail.stderr is not None:
+            _print_test_detail("Captured stderr", detail.stderr)
+    if result.stdout:
+        click.echo(result.stdout, nl=not result.stdout.endswith("\n"))
+    if result.stderr:
+        click.echo(result.stderr, nl=not result.stderr.endswith("\n"), err=True)
+    click.echo(f"\n{_test_summary(result)}")
+
+
+def _print_trace_test_result(package: str, result: TestResult) -> None:
+    click.echo(f"Package: {package}")
+    click.echo(f"Status: {result.status}")
+    click.echo(f"Exit code: {result.exit_code}")
+    click.echo(f"Time: {result.elapsed_seconds:.2f}s")
+    click.echo(f"Compiler: {result.compiler}")
+    click.echo(f"Runner: {result.runner}")
+    if result.tests is not None:
+        click.echo(f"Tests: {result.tests}")
+        click.echo(f"Passed: {result.passed}")
+        click.echo(f"Failed: {result.failed}")
+        click.echo(f"Unresolved: {result.unresolved}")
+        _print_test_diagnostics(result.details)
+    if result.stdout:
+        _print_test_detail("Runner stdout", result.stdout)
+    if result.stderr:
+        _print_test_detail("Runner stderr", result.stderr)
+
+
+def _test_summary(result: TestResult) -> str:
+    if result.tests is None:
+        return f"{result.status} in {result.elapsed_seconds:.2f}s"
+    parts = []
+    for count, label in (
+        (result.failed, "failed"),
+        (result.unresolved, "unresolved"),
+        (result.passed, "passed"),
+    ):
+        if count:
+            parts.append(f"{count} {label}")
+    parts.append(f"{result.tests} total")
+    return f"{', '.join(parts)} in {result.elapsed_seconds:.2f}s"
+
+
+def _print_test_detail(label: str, value: str) -> None:
+    lines = value.splitlines() or [""]
+    click.echo(f"    {label}: {lines[0]}")
+    for line in lines[1:]:
+        click.echo(f"      {line}")
 
 
 @main.command("task")
@@ -711,6 +815,8 @@ def _test_command_options(values: Mapping[str, Any]) -> _TestCommandOptions:
         regenerate_ecf=values["regenerate_ecf"],
         package=values["package"],
         output_json=values["output_json"],
+        trace=values["trace"],
+        raw=values["raw"],
     )
 
 
@@ -763,7 +869,7 @@ def _split_run_arguments(arguments: tuple[str, ...]) -> tuple[tuple[Path, ...], 
 
 
 def _validate_file_run_options(options: _RunCommandOptions) -> None:
-    if options.target != "default":
+    if options.target is not None:
         raise EvmError("--target is not supported in file mode")
     if options.regenerate_ecf:
         raise EvmError("--regenerate-ecf is not supported in file mode")

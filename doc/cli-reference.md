@@ -60,7 +60,7 @@ Options:
   --configuration-only    Do not invoke an Eiffel compiler.
   --release               Check the release mode.
   --compiler TEXT         Compiler adapter ID: ise or gobo.
-  --target TEXT           Target name. [default: default]
+  --target TEXT           Target name; defaults to project.default-target.
   --regenerate-ecf        Explicitly overwrite managed ECF.
   --package TEXT          Limit a workspace command to one package.
   --json                  Emit stable JSON for CI.
@@ -77,7 +77,7 @@ evm build [OPTIONS]
 Options:
   --release               Build in release mode.
   --compiler TEXT         Compiler adapter ID: ise or gobo.
-  --target TEXT           Target name. [default: default]
+  --target TEXT           Target name; defaults to project.default-target.
   --offline               Forbid network access.
   --regenerate-ecf        Explicitly overwrite managed ECF.
   --package TEXT          Limit a workspace build to one package.
@@ -96,7 +96,7 @@ evm run [OPTIONS] [FILES...] [-- ARGS...]
 Options:
   --release               Build and run in release mode.
   --compiler TEXT         Compiler adapter ID: ise or gobo.
-  --target TEXT           Target name. [default: default]
+  --target TEXT           Target name; defaults to project.default-target.
   --offline               Forbid network access.
   --regenerate-ecf        Explicitly overwrite managed ECF.
   --class TEXT            Root class for file mode.
@@ -138,6 +138,11 @@ Build and run the configured Eiffel test system.
 The `[test].runner` manifest field accepts `auto`, `target`, `getest`, or
 `autotest`. The AutoTest runner supports exact `--class` and `--feature`
 filtering and reports Tests, Passed, Failed, and Unresolved counters.
+By default, AutoTest failures are correlated with project sources and shown as
+`file:line`, feature, source assertion, and assertion tag. `--trace` expands the
+normalized exception metadata and Eiffel stack trace. `--raw` suppresses EVM's
+summary and passes through the selected runner's output. The three machine or
+diagnostic output modes `--json`, `--trace`, and `--raw` are mutually exclusive.
 
 ```text
 evm test [OPTIONS]
@@ -151,6 +156,8 @@ Options:
   --regenerate-ecf        Explicitly overwrite managed ECF.
   --package TEXT          Limit a workspace test to one package.
   --json                  Emit stable JSON for CI.
+  --trace                 Show complete normalized failure diagnostics.
+  --raw                   Pass through the test runner's native output.
   --help
 ```
 
@@ -175,7 +182,7 @@ evm explain [OPTIONS]
 
 Options:
   --targets               List effective targets.
-  --target TEXT           Target name. [default: default]
+  --target TEXT           Target name; defaults to project.default-target.
   --release               Explain release mode.
   --compiler TEXT         Compiler adapter ID: ise or gobo.
   --json                  Emit stable JSON.
@@ -200,9 +207,10 @@ Options:
   --help
 ```
 
-The result is classified as `lossless`, `lossless-with-overlay`, `partial`, or
-`unsupported`. Importing an IRON package with multiple ECF entries requires
-`--project`. IRON `setup` declarations are reported but never executed.
+The command atomically creates only `Eiffel.toml` and `Eiffel.lock`. The
+original ECF remains authoritative and is neither changed nor copied.
+Importing an IRON package with multiple ECF entries requires `--project`.
+IRON `setup` declarations are reported but never executed.
 
 ## `evm iron export`
 

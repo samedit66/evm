@@ -1,18 +1,25 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from lxml import etree
 
 from evm.autotest import (
     AutoTestCase,
     _filter_autotest_cases,
+    _generate_runner_project,
     _parse_descendants,
     _parse_test_features,
+    _run_case,
+    _run_raw_case,
     _runner_ecf,
     _runner_source,
 )
 from evm.errors import EvmError
+from evm.model import BuildRequest
+from evm.project import create_project
 
 
 def test_parses_effective_autotest_descendants() -> None:
@@ -76,6 +83,134 @@ def test_generated_runner_registers_each_test() -> None:
     assert "evaluator: EQA_TEST_EVALUATOR [CALCULATOR_TESTS]" in source
     assert "selected_test_set.test_subtract" in source
     assert "EVM_AUTOTEST_RESULT|" in source
+    assert 'argument (3).same_string ("--raw")' in source
+    assert "report_raw" in source
+
+
+def test_generated_runner_is_application_for_library_project(tmp_path: Path) -> None:
+    project = create_project(tmp_path / "library", library=True)
+
+    generated = _generate_runner_project(
+        project,
+        BuildRequest(target="default"),
+        (AutoTestCase("LIBRARY_TESTS", "test_feature"),),
+    )
+
+    assert generated.kind == "application"
+
+
+def test_runner_protocol_preserves_failure_diagnostics(tmp_path: Path, monkeypatch) -> None:
+    output = """EVM_AUTOTEST_RESULT|failed
+EVM_AUTOTEST_ASSERTION|value2
+EVM_AUTOTEST_EXCEPTION_CLASS|DEVELOPER_EXCEPTION
+EVM_AUTOTEST_EXCEPTION_FEATURE|assert
+EVM_AUTOTEST_EXCEPTION_CODE|24
+EVM_AUTOTEST_EXCEPTION_TAG|assertion violated
+EVM_AUTOTEST_BREAKPOINT_SLOT|7
+EVM_AUTOTEST_TEST_INVALID|false
+EVM_AUTOTEST_TRACE_VALID|true
+EVM_AUTOTEST_OUTPUT_BEGIN
+diagnostic output
+EVM_AUTOTEST_OUTPUT_END
+EVM_AUTOTEST_TRACE_BEGIN
+first trace line
+second trace line
+EVM_AUTOTEST_TRACE_END
+"""
+    monkeypatch.setattr(
+        "evm.autotest.subprocess.run",
+        lambda *arguments, **options: SimpleNamespace(
+            returncode=1,
+            stdout=output,
+            stderr="runner diagnostic on stderr\n",
+        ),
+    )
+
+    diagnostic = _run_case(
+        tmp_path / "runner",
+        tmp_path,
+        AutoTestCase("MATRIX_TESTS", "test_value"),
+    )
+
+    assert diagnostic.status == "failed"
+    assert diagnostic.assertion == "value2"
+    assert diagnostic.exception_class == "DEVELOPER_EXCEPTION"
+    assert diagnostic.exception_feature == "assert"
+    assert diagnostic.exception_code == 24
+    assert diagnostic.exception_tag == "assertion violated"
+    assert diagnostic.breakpoint_slot == 7
+    assert diagnostic.test_invalid is False
+    assert diagnostic.trace_valid is True
+    assert diagnostic.output == "diagnostic output"
+    assert diagnostic.stderr == "runner diagnostic on stderr"
+    assert diagnostic.trace == "first trace line\nsecond trace line"
+
+
+def test_runner_protocol_omits_unavailable_breakpoint_slot(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "evm.autotest.subprocess.run",
+        lambda *arguments, **options: SimpleNamespace(
+            returncode=1,
+            stdout=("EVM_AUTOTEST_RESULT|failed\nEVM_AUTOTEST_BREAKPOINT_SLOT|0\n"),
+            stderr="",
+        ),
+    )
+
+    diagnostic = _run_case(
+        tmp_path / "runner",
+        tmp_path,
+        AutoTestCase("MATRIX_TESTS", "test_value"),
+    )
+
+    assert diagnostic.breakpoint_slot is None
+
+
+def test_runner_protocol_preserves_unresolved_status(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "evm.autotest.subprocess.run",
+        lambda *arguments, **options: SimpleNamespace(
+            returncode=2,
+            stdout="EVM_AUTOTEST_RESULT|unresolved\n",
+            stderr="",
+        ),
+    )
+
+    diagnostic = _run_case(
+        tmp_path / "runner",
+        tmp_path,
+        AutoTestCase("MATRIX_TESTS", "test_value"),
+    )
+
+    assert diagnostic.status == "unresolved"
+
+
+@pytest.mark.parametrize(
+    ("exit_code", "status"),
+    [(0, "passed"), (1, "failed"), (2, "unresolved")],
+)
+def test_raw_runner_passes_output_through(
+    tmp_path: Path,
+    monkeypatch,
+    exit_code: int,
+    status: str,
+) -> None:
+    commands = []
+    monkeypatch.setattr(
+        "evm.autotest.subprocess.run",
+        lambda command, **options: (
+            commands.append((command, options)) or SimpleNamespace(returncode=exit_code)
+        ),
+    )
+    test_case = AutoTestCase("MATRIX_TESTS", "test_value")
+
+    result = _run_raw_case(tmp_path / "runner", tmp_path, test_case)
+
+    assert result == status
+    assert commands[0][0][-1] == "--raw"
+    assert "capture_output" not in commands[0][1]
 
 
 def test_runner_ecf_rebases_relative_locations(tmp_path: Path) -> None:
@@ -101,3 +236,20 @@ def test_runner_ecf_rebases_relative_locations(tmp_path: Path) -> None:
     assert 'class="EVM_AUTOTEST_APPLICATION"' in overlay
     assert 'name="testing"' in overlay
     assert f'location="{generated}"' in overlay
+
+
+def test_runner_ecf_preserves_legacy_namespace(tmp_path: Path) -> None:
+    ecf = tmp_path / "legacy.ecf"
+    namespace = "http://www.eiffel.com/developers/xml/configuration-1-18-0"
+    ecf.write_text(
+        f'<system xmlns="{namespace}" name="legacy" '
+        'uuid="00000000-0000-4000-8000-000000000000">'
+        '<target name="tests"><root class="ANY" feature="default_create"/>'
+        '<library name="testing" location="$ISE_LIBRARY/library/testing/testing.ecf"/>'
+        "</target></system>"
+    )
+
+    generated = etree.fromstring(_runner_ecf(ecf, "tests", tmp_path / "generated"))
+
+    namespaces = {etree.QName(element).namespace for element in generated.iter()}
+    assert namespaces == {namespace}

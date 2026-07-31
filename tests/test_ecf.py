@@ -6,12 +6,19 @@ from pathlib import Path
 import pytest
 from lxml import etree
 
-from evm.ecf import ECF_NAMESPACE, generate_ecf, semantic_diff, semantic_summary, validate_ecf
+from evm.ecf import (
+    ECF_NAMESPACE,
+    generate_ecf,
+    prepare_legacy_ecf,
+    semantic_diff,
+    semantic_summary,
+    validate_ecf,
+)
 from evm.errors import EvmError
 from evm.lockfile import LockedPackage, LockFile, manifest_fingerprint
 from evm.manifest import load_manifest
 from evm.model import Dependency
-from evm.project import create_project
+from evm.project import create_project, import_ecf
 
 
 def test_semantic_diff_ignores_xml_formatting_and_management_comment(
@@ -48,6 +55,52 @@ def test_validate_ecf_rejects_unsupported_namespace(tmp_path: Path) -> None:
 
     with pytest.raises(EvmError, match="unsupported ECF namespace"):
         validate_ecf(ecf)
+
+
+def test_prepare_legacy_ecf_stages_portable_locations(tmp_path: Path) -> None:
+    (tmp_path / "library").mkdir()
+    ecf = tmp_path / "legacy.ecf"
+    ecf.write_text(
+        '<system xmlns="http://www.eiffel.com/developers/xml/configuration-1-18-0" '
+        'name="legacy" uuid="00000000-0000-4000-8000-000000000000" '
+        'library_target="legacy"><target name="legacy"><root all_classes="true"/>'
+        '<library name="base" location="$LEGACY_LIBRARY\\base\\base-safe.ecf"/>'
+        '<cluster name="legacy" location="library\\"/></target></system>'
+    )
+    before = ecf.read_bytes()
+    project, _, _ = import_ecf(ecf, tmp_path)
+
+    staged = prepare_legacy_ecf(project)
+
+    assert staged == tmp_path / ".evm" / "tmp" / "legacy" / "legacy.ecf"
+    assert ecf.read_bytes() == before
+    locations = etree.parse(str(staged)).xpath("//*[@location]/@location")
+    assert "$LEGACY_LIBRARY/base/base-safe.ecf" in locations
+    assert "../../../library" in locations
+
+
+def test_prepare_legacy_ecf_uses_available_modern_library_name(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    library = tmp_path / "ise" / "library" / "base"
+    library.mkdir(parents=True)
+    (library / "base.ecf").write_text("modern")
+    (tmp_path / "src").mkdir()
+    ecf = tmp_path / "legacy.ecf"
+    ecf.write_text(
+        f'<system xmlns="{ECF_NAMESPACE}" name="legacy" '
+        'uuid="00000000-0000-4000-8000-000000000000" library_target="legacy">'
+        '<target name="legacy"><root all_classes="true"/>'
+        '<library name="base" location="$ISE_LIBRARY\\library\\base\\base-safe.ecf"/>'
+        '<cluster name="legacy" location="src"/></target></system>'
+    )
+    project, _, _ = import_ecf(ecf, tmp_path)
+
+    staged = prepare_legacy_ecf(project, {"ISE_LIBRARY": tmp_path / "ise"})
+
+    locations = etree.parse(str(staged)).xpath("//*[@location]/@location")
+    assert "$ISE_LIBRARY/library/base/base.ecf" in locations
 
 
 def test_ecf_fragment_include_adds_target_constructs(tmp_path: Path) -> None:

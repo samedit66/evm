@@ -9,14 +9,20 @@ import re
 import subprocess
 import uuid
 from dataclasses import dataclass, replace
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 import tomlkit
 from lxml import etree
 
 from evm.dependencies import install_dependencies
-from evm.ecf import ensure_managed_ecf, generate_ecf, parse_ecf, validate_ecf
+from evm.ecf import (
+    ensure_managed_ecf,
+    generate_ecf,
+    parse_ecf,
+    prepare_legacy_ecf,
+    validate_ecf,
+)
 from evm.errors import EvmError
 from evm.filesystem import atomic_write, atomic_write_many
 from evm.iron import (
@@ -27,7 +33,7 @@ from evm.iron import (
 )
 from evm.lockfile import LOCK_NAME, empty_lock, load_lock, serialize_lock
 from evm.manifest import load_manifest, parse_manifest
-from evm.model import BuildRequest, PackageMetadata, Project, Root, Target
+from evm.model import BuildRequest, PackageMetadata, Project, Root, Target, TestConfiguration
 from evm.toolchains import (
     Toolchain,
     artifact_candidates,
@@ -55,7 +61,7 @@ class _ImportedProject:
     primary: _ImportedTarget
     targets: tuple[_ImportedTarget, ...]
     ecf: str
-    overlay: str | None
+    test: TestConfiguration | None
 
 
 @dataclass(frozen=True)
@@ -63,7 +69,6 @@ class _EcfImportAnalysis:
     project: _ImportedProject
     level: str
     warnings: tuple[str, ...]
-    overlay: bytes | None
 
 
 @dataclass(frozen=True)
@@ -237,11 +242,29 @@ def compile_project(
     )
     toolchain = select_toolchain(project, request.compiler)
     build_directory = prepare_build_directory(toolchain, project, request, check_only)
-    command = compiler_command(toolchain, project, request, check_only)
+    compilation_project = prepare_compilation_project(project, toolchain)
+    command = compiler_command(toolchain, compilation_project, request, check_only)
     if announce:
         print_toolchain(toolchain, request=request)
     run_compiler(command, build_directory, capture_output=not announce)
     return toolchain
+
+
+def _legacy_ecf_variables(toolchain: Toolchain) -> dict[str, Path]:
+    if toolchain.adapter == "ise":
+        configured = os.environ.get("ISE_LIBRARY")
+        root = Path(configured) if configured else toolchain.executable.resolve().parent.parent
+        return {"ISE_LIBRARY": root}
+    return {}
+
+
+def prepare_compilation_project(project: Project, toolchain: Toolchain) -> Project:
+    if project.ecf_managed:
+        return project
+    return replace(
+        project,
+        ecf_path=prepare_legacy_ecf(project, _legacy_ecf_variables(toolchain)),
+    )
 
 
 def run_project(
@@ -434,8 +457,6 @@ def _write_import(
         manifest_path: manifest.encode(),
         destination / LOCK_NAME: serialize_lock(empty_lock(parsed_project)),
     }
-    if analysis.overlay is not None:
-        files[destination / "config" / "imported.ecf"] = analysis.overlay
     existing = next((path for path in files if path.exists()), None)
     if existing is not None:
         raise EvmError(f"refusing to overwrite existing {existing}")
@@ -489,9 +510,9 @@ def _analyze_ecf_import(source: Path, destination: Path) -> _EcfImportAnalysis:
         raise EvmError("Import level: unsupported\nECF contains no targets")
     warnings: list[str] = []
     warnings.extend(_import_path_warnings(root))
-    primary_element = next((target for target in targets if target.get("name") == "default"), None)
-    if primary_element is None:
-        primary_element = targets[0]
+    library_target = root.get("library_target")
+    primary_element = _primary_import_target(targets, library_target)
+    if primary_element.get("name") != "default":
         warnings.append(
             f"ECF has no 'default' target; {primary_element.get('name')!r} is the manifest default"
         )
@@ -500,7 +521,8 @@ def _analyze_ecf_import(source: Path, destination: Path) -> _EcfImportAnalysis:
     )
     primary_index = targets.index(primary_element)
     primary = imported_targets[primary_index]
-    application = any(target.root is not None for target in imported_targets)
+    library = library_target is not None or _is_library_target(primary_element)
+    application = not library
     if application and primary.root is None and primary.extends is None:
         warnings.append("primary application target has no root or parent target")
         inherited_root = next(target.root for target in imported_targets if target.root is not None)
@@ -509,34 +531,88 @@ def _analyze_ecf_import(source: Path, destination: Path) -> _EcfImportAnalysis:
         warnings.append("primary target contains no source clusters")
         primary = replace(primary, clusters=("src",))
 
-    has_unsafe_doctype = bool(tree.docinfo.doctype)
-    overlay_needed = _requires_import_overlay(root)
-    if has_unsafe_doctype:
-        warnings.append("document type declarations cannot be copied into a safe ECF overlay")
     manifest_targets = tuple(
         _manifest_import_target(target, primary.name, application, warnings)
         for index, target in enumerate(imported_targets)
         if index != primary_index
     )
-    preserve_overlay = overlay_needed and not has_unsafe_doctype
+    test = _import_test_configuration(root, targets, warnings)
     return _EcfImportAnalysis(
         project=_ImportedProject(
             name=name,
             uuid=uuid_value,
-            library=not application,
+            library=library,
             primary=primary,
             targets=manifest_targets,
             ecf=os.path.relpath(source, destination),
-            overlay="config/imported.ecf" if preserve_overlay else None,
+            test=test,
         ),
-        level=_import_level(has_unsafe_doctype, overlay_needed),
+        level="lossless",
         warnings=tuple(warnings),
-        overlay=(
-            etree.tostring(root, encoding="UTF-8", xml_declaration=True)
-            if preserve_overlay
-            else None
-        ),
     )
+
+
+def _primary_import_target(
+    targets: list[etree._Element],
+    library_target: str | None,
+) -> etree._Element:
+    requested_name = library_target or "default"
+    selected = next((target for target in targets if target.get("name") == requested_name), None)
+    if selected is not None:
+        return selected
+    if library_target is not None:
+        raise EvmError(
+            f"Import level: unsupported\nECF library_target {library_target!r} does not exist"
+        )
+    return targets[0]
+
+
+def _is_library_target(target: etree._Element) -> bool:
+    roots = target.xpath("./*[local-name()='root']")
+    return not roots or roots[0].get("all_classes") == "true"
+
+
+def _import_test_configuration(
+    system: etree._Element,
+    targets: list[etree._Element],
+    warnings: list[str],
+) -> TestConfiguration | None:
+    named = [target for target in targets if target.get("name", "").casefold() in {"test", "tests"}]
+    candidates = named or [
+        target for target in targets if _target_inherits_library(system, target, "testing")
+    ]
+    if len(candidates) != 1:
+        if len(candidates) > 1:
+            names = ", ".join(repr(target.get("name")) for target in candidates)
+            warnings.append(f"multiple test targets detected; configure [test].target: {names}")
+        return None
+    target = candidates[0]
+    target_name = target.get("name")
+    if target_name is None:
+        return None
+    runner = "autotest" if _target_inherits_library(system, target, "testing") else "target"
+    warnings.append(f"test target {target_name!r} detected with {runner!r} runner")
+    return TestConfiguration(target_name, runner)
+
+
+def _target_inherits_library(
+    system: etree._Element,
+    target: etree._Element,
+    library: str,
+) -> bool:
+    current: etree._Element | None = target
+    while current is not None:
+        if current.xpath("./*[local-name()='library'][@name=$name]", name=library):
+            return True
+        parent_name = current.get("extends")
+        if parent_name is None:
+            return False
+        parents = system.xpath(
+            "./*[local-name()='target'][@name=$name]",
+            name=parent_name,
+        )
+        current = parents[0] if len(parents) == 1 else None
+    return False
 
 
 def _import_path_warnings(root: etree._Element) -> list[str]:
@@ -544,13 +620,14 @@ def _import_path_warnings(root: etree._Element) -> list[str]:
     library_count = len(root.xpath("./*[local-name()='target']/*[local-name()='library']"))
     if library_count:
         noun = "library" if library_count == 1 else "libraries"
-        warnings.append(f"{library_count} {noun} retained as opaque ECF overlay entries")
+        verb = "remains" if library_count == 1 else "remain"
+        warnings.append(f"{library_count} {noun} {verb} defined by the source legacy ECF")
     absolute_locations = [
         location
         for node in root.xpath(
             "./*[local-name()='target']/*[local-name()='cluster' or local-name()='library']"
         )
-        if (location := node.get("location")) and Path(location).is_absolute()
+        if (location := node.get("location")) and _is_absolute_ecf_path(location)
     ]
     if absolute_locations:
         warnings.append(
@@ -559,27 +636,19 @@ def _import_path_warnings(root: etree._Element) -> list[str]:
     return warnings
 
 
-def _import_level(has_unsafe_doctype: bool, overlay_needed: bool) -> str:
-    if has_unsafe_doctype:
-        return "partial"
-    if overlay_needed:
-        return "lossless-with-overlay"
-    return "lossless"
-
-
 def _manifest_import_target(
     target: _ImportedTarget,
     primary_name: str,
     application: bool,
     warnings: list[str],
 ) -> _ImportedTarget:
-    extends = "default" if target.extends == primary_name else target.extends
+    extends = target.extends
     if application and target.root is None and extends is None:
         warnings.append(
             f"application target {target.name!r} has no root or parent; "
-            "the manifest representation inherits the default target"
+            f"the manifest representation inherits {primary_name!r}"
         )
-        extends = "default"
+        extends = primary_name
     return replace(target, extends=extends)
 
 
@@ -619,39 +688,14 @@ def _imported_cluster_location(
     source_directory: Path,
     destination: Path,
 ) -> str:
-    if Path(location).is_absolute() or "$" in location:
+    if _is_absolute_ecf_path(location) or "$" in location:
         return location
-    return os.path.relpath(source_directory / location, destination)
+    portable_location = location.replace("\\", "/")
+    return Path(os.path.relpath(source_directory / portable_location, destination)).as_posix()
 
 
-def _requires_import_overlay(root: etree._Element) -> bool:
-    system_attributes = {etree.QName(attribute).localname for attribute in root.attrib} - {
-        "name",
-        "uuid",
-        "library_target",
-        "schemaLocation",
-    }
-    if system_attributes:
-        return True
-    if any(
-        isinstance(child.tag, str) and etree.QName(child).localname != "target" for child in root
-    ):
-        return True
-    for target in root.xpath("./*[local-name()='target']"):
-        if set(target.attrib) - {"name", "extends"}:
-            return True
-        for child in target:
-            if not isinstance(child.tag, str):
-                continue
-            local_name = etree.QName(child).localname
-            if local_name not in {"root", "cluster"}:
-                return True
-            if local_name == "cluster":
-                if set(child.attrib) - {"name", "location", "recursive"} or len(child):
-                    return True
-            elif set(child.attrib) - {"class", "feature", "all_classes"} or len(child):
-                return True
-    return False
+def _is_absolute_ecf_path(location: str) -> bool:
+    return Path(location).is_absolute() or PureWindowsPath(location).is_absolute()
 
 
 def _new_manifest(name: str, uuid_value: str, library: bool) -> str:
@@ -683,6 +727,8 @@ def _imported_manifest(project: _ImportedProject) -> str:
         "ecf-managed = false\n"
         f"ecf = {json.dumps(project.ecf)}\n"
     )
+    if project.primary.name != "default":
+        result += f"default-target = {json.dumps(project.primary.name)}\n"
     if project.primary.root is not None:
         result += (
             f"\n[root]\nclass = {json.dumps(project.primary.root.class_name)}\n"
@@ -698,8 +744,11 @@ def _imported_manifest(project: _ImportedProject) -> str:
             result += f"sources = [{target_sources}]\n"
         if target.extends is not None:
             result += f"extends = {json.dumps(target.extends)}\n"
-    if project.overlay is not None:
-        result += f"\n[ecf]\ninclude = [{json.dumps(project.overlay)}]\n"
+    if project.test is not None:
+        result += (
+            f"\n[test]\ntarget = {json.dumps(project.test.target)}\n"
+            f"runner = {json.dumps(project.test.runner)}\n"
+        )
     return result
 
 

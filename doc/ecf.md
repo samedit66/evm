@@ -51,24 +51,18 @@ not a second project manifest.
 
 ## Import an existing project
 
-Create an initial EVM project from an existing ECF without changing the source
-file:
+Create an initial EVM project in place without changing or copying the source
+ECF:
 
 ```console
-$ evm import legacy.ecf --destination imported
-$ cd imported
-$ evm explain --ecf-diff
+$ evm import legacy.ecf
 $ evm check --configuration-only
 ```
 
-EVM reports the import fidelity:
-
-| Level | Meaning |
-|---|---|
-| `lossless` | The manifest represents the ECF directly |
-| `lossless-with-overlay` | Safe unsupported constructs are retained in an overlay |
-| `partial` | The project is imported with explicit limitations |
-| `unsupported` | The ECF cannot be represented safely |
+The command creates only `Eiffel.toml` and `Eiffel.lock`. Native constructs
+that have no high-level manifest representation remain in the original legacy
+ECF. See [Migrating an existing Eiffel project](migrating-existing-projects.md)
+for target selection, old ECF versions, path handling, and verification.
 
 ## Legacy mode
 
@@ -78,6 +72,7 @@ Imported projects default to:
 [project]
 ecf-managed = false
 ecf = "legacy.ecf"
+default-target = "legacy"
 ```
 
 In legacy mode EVM reads and uses the existing ECF but does not automatically

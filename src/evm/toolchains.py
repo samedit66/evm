@@ -157,14 +157,13 @@ def prepare_build_directory(
     project: Project,
     request: BuildRequest,
     check_only: bool = False,
+    *,
+    clean: bool = False,
 ) -> Path:
     directory = _build_directory(toolchain, project, request)
     if (
-        toolchain.adapter == "ise"
-        and project.kind == "library"
-        and not check_only
-        and directory.exists()
-    ):
+        clean or (toolchain.adapter == "ise" and project.kind == "library" and not check_only)
+    ) and directory.exists():
         shutil.rmtree(directory)
     directory.mkdir(parents=True, exist_ok=True)
     return directory
@@ -264,7 +263,9 @@ def artifact_candidates(
     executable = project.name + (".exe" if os.name == "nt" else "")
     if toolchain.adapter == "ise":
         code = "F_code" if request.release else "W_code"
-        return (base / "EIFGENs" / request.target / code / executable,)
+        output = base / "EIFGENs" / request.target / code
+        driver = "driver" + (".exe" if os.name == "nt" else "")
+        return (output / executable, output / driver)
     return (base / executable, base / request.target, base / f"{request.target}.exe")
 
 

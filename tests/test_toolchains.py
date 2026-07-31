@@ -11,6 +11,7 @@ from evm.project import create_project
 from evm.toolchains import (
     Detection,
     Toolchain,
+    artifact_candidates,
     compiler_command,
     prepare_build_directory,
     select_toolchain,
@@ -143,6 +144,21 @@ def test_compiler_command_has_no_filesystem_side_effects(tmp_path: Path) -> None
     compiler_command(toolchain, project, request)
 
     assert not (project.directory / "build").exists()
+
+
+def test_ise_workbench_artifacts_include_driver(tmp_path: Path) -> None:
+    project = create_project(tmp_path / "hello")
+    toolchain = Toolchain(
+        "ise",
+        Path("/bin/ec"),
+        NumericVersion.parse("25.12"),
+        "explicit",
+        "--compiler",
+    )
+
+    candidates = artifact_candidates(toolchain, project, BuildRequest())
+
+    assert candidates[1].name in {"driver", "driver.exe"}
 
 
 def test_ise_library_preparation_removes_stale_precompile(tmp_path: Path) -> None:

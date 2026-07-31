@@ -10,6 +10,9 @@ from lxml import etree
 from evm.cli import main
 from evm.ecf import ECF_NAMESPACE
 from evm.lockfile import load_lock
+from evm.manifest import load_manifest
+from evm.testing import TestDiagnostic as EvmTestDiagnostic
+from evm.testing import TestResult as EvmTestResult
 
 
 def test_new_creates_application_and_stable_ecf(tmp_path: Path, monkeypatch) -> None:
@@ -67,6 +70,18 @@ def test_init_preserves_existing_gitignore(tmp_path: Path, monkeypatch) -> None:
     assert result.exit_code == 0, result.output
     assert gitignore.read_text() == "custom/\n"
     assert (project / "Eiffel.toml").is_file()
+
+
+def test_init_directs_existing_eiffel_project_to_import(tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / "legacy.ecf").write_text("existing")
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(main, ["init"])
+
+    assert result.exit_code != 0
+    assert "existing Eiffel project detected" in result.output
+    assert "evm import legacy.ecf" in result.output
+    assert not (tmp_path / "Eiffel.toml").exists()
 
 
 def test_check_reports_missing_cluster(tmp_path: Path, monkeypatch) -> None:
@@ -134,14 +149,176 @@ def test_import_preserves_source_and_uuid(tmp_path: Path) -> None:
     result = runner.invoke(main, ["import", str(ecf), "--destination", str(destination)])
 
     assert result.exit_code == 0, result.output
-    assert "Import level: lossless-with-overlay" in result.output
+    assert "Import level: lossless" in result.output
     assert ecf.read_bytes() == before
     manifest = (destination / "Eiffel.toml").read_text()
     assert f'uuid = "{expected_uuid}"' in manifest
     assert "ecf-managed = false" in manifest
-    assert '[ecf]\ninclude = ["config/imported.ecf"]' in manifest
-    assert (destination / "config" / "imported.ecf").is_file()
+    assert "[ecf]" not in manifest
+    assert sorted(path.name for path in destination.iterdir()) == ["Eiffel.lock", "Eiffel.toml"]
     assert load_lock(destination / "Eiffel.lock").packages == ()
+
+
+def test_imports_algae_style_legacy_project_in_place(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    for directory in ("library", "tests", "benchmark"):
+        (tmp_path / directory).mkdir()
+    ecf = tmp_path / "algae.ecf"
+    ecf.write_text(
+        '<?xml version="1.0"?>'
+        '<system xmlns="http://www.eiffel.com/developers/xml/configuration-1-18-0" '
+        'name="algae" uuid="0BD05554-129B-443B-817C-3E8699BB3295" '
+        'library_target="algae">'
+        '<target name="algae"><root all_classes="true"/>'
+        '<option warning="true"/><library name="base" '
+        'location="$ISE_LIBRARY\\library\\base\\base-safe.ecf"/>'
+        '<cluster name="algae" location="library\\" recursive="true"/></target>'
+        '<target name="tests" extends="algae">'
+        '<root class="ANY" feature="default_create"/>'
+        '<library name="testing" location="$ISE_LIBRARY\\library\\testing\\testing.ecf"/>'
+        '<cluster name="tests" location=".\\tests\\" recursive="true"/></target>'
+        '<target name="benchmark" extends="algae">'
+        '<root class="RUN_BENCHMARKS" feature="make"/>'
+        '<cluster name="benchmark" location=".\\benchmark\\" recursive="true"/></target>'
+        "</system>"
+    )
+    before = ecf.read_bytes()
+    monkeypatch.chdir(tmp_path)
+
+    imported = CliRunner().invoke(main, ["import", "algae.ecf"])
+
+    assert imported.exit_code == 0, imported.output
+    assert sorted(path.name for path in tmp_path.glob("Eiffel.*")) == [
+        "Eiffel.lock",
+        "Eiffel.toml",
+    ]
+    assert not (tmp_path / "config").exists()
+    assert ecf.read_bytes() == before
+    project = load_manifest(tmp_path / "Eiffel.toml")
+    assert project.kind == "library"
+    assert project.default_target == "algae"
+    assert project.target("algae").sources == ("library",)
+    assert project.target("tests").sources == ("tests",)
+    assert project.target("tests").extends == "algae"
+    assert project.target("benchmark").sources == ("benchmark",)
+    assert [target.name for target in project.targets] == ["algae", "tests", "benchmark"]
+    assert project.test is not None
+    assert project.test.target == "tests"
+    assert project.test.runner == "autotest"
+    manifest = (tmp_path / "Eiffel.toml").read_text()
+    assert '[test]\ntarget = "tests"\nrunner = "autotest"' in manifest
+    checked = CliRunner().invoke(main, ["check", "--configuration-only"])
+    assert checked.exit_code == 0, checked.output
+
+
+def test_build_uses_imported_default_target(tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / "library").mkdir()
+    (tmp_path / "algae.ecf").write_text(
+        f'<system xmlns="{ECF_NAMESPACE}" name="algae" '
+        'uuid="00000000-0000-4000-8000-000000000000" library_target="algae">'
+        '<target name="algae"><root all_classes="true"/>'
+        '<cluster name="algae" location="library"/></target></system>'
+    )
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+    assert runner.invoke(main, ["import", "algae.ecf"]).exit_code == 0
+    requests = []
+
+    def compile_without_toolchain(project, request, check_only=False, *, announce=True):
+        requests.append(request)
+
+    monkeypatch.setattr("evm.cli.compile_project", compile_without_toolchain)
+
+    built = runner.invoke(main, ["build"])
+
+    assert built.exit_code == 0, built.output
+    assert requests[0].target == "algae"
+
+
+def test_test_output_lists_failed_and_unresolved_names(tmp_path: Path, monkeypatch) -> None:
+    project = tmp_path / "hello"
+    runner = CliRunner()
+    assert runner.invoke(main, ["new", str(project)]).exit_code == 0
+    monkeypatch.chdir(project)
+    result = EvmTestResult(
+        status="failed",
+        exit_code=1,
+        elapsed_seconds=0.5,
+        compiler="ise 25.12",
+        runner="autotest",
+        tests=3,
+        passed=1,
+        failed=1,
+        unresolved=1,
+        details=(
+            EvmTestDiagnostic(
+                "HELLO_TESTS.test_failure",
+                "failed",
+                assertion="value2",
+                exception_class="DEVELOPER_EXCEPTION",
+                exception_tag="assertion violated",
+                stderr="runtime diagnostic",
+                trace="first trace line\nsecond trace line",
+                trace_valid=True,
+                source_path="tests/hello_tests.e",
+                source_line=12,
+                source_text='assert ("value2", actual = expected)',
+            ),
+            EvmTestDiagnostic("HELLO_TESTS.test_unresolved", "unresolved"),
+        ),
+        stdout="runner summary\n",
+        stderr="runner warning\n",
+    )
+    requests = []
+
+    def return_result(project, request):
+        requests.append(request)
+        return result
+
+    monkeypatch.setattr("evm.cli.test_project", return_result)
+
+    text_result = runner.invoke(main, ["test"])
+    trace_result = runner.invoke(main, ["test", "--trace"])
+    json_result = runner.invoke(main, ["test", "--json"])
+    raw_result = runner.invoke(main, ["test", "--raw"])
+
+    assert text_result.exit_code == 1
+    assert "FAILED HELLO_TESTS.test_failure" in text_result.output
+    assert "tests/hello_tests.e:12" in text_result.output
+    assert 'assert ("value2", actual = expected)' in text_result.output
+    assert "Assertion failed: value2" in text_result.output
+    assert "first trace line" not in text_result.output
+    assert "UNRESOLVED HELLO_TESTS.test_unresolved" in text_result.output
+    assert "1 failed, 1 unresolved, 1 passed, 3 total in 0.50s" in text_result.output
+    assert "Failed tests:\n  HELLO_TESTS.test_failure" in trace_result.output
+    assert "Exception tag: assertion violated" in trace_result.output
+    assert "Trace valid: True" in trace_result.output
+    assert "Trace: first trace line\n      second trace line" in trace_result.output
+    assert raw_result.output == ""
+    assert requests[-1].raw is True
+    payload = json.loads(json_result.output)
+    package = payload["packages"][0]
+    assert package["failed_tests"] == ["HELLO_TESTS.test_failure"]
+    assert package["unresolved_tests"] == ["HELLO_TESTS.test_unresolved"]
+    assert package["test_details"][0]["exception_class"] == "DEVELOPER_EXCEPTION"
+    assert package["test_details"][0]["source_path"] == "tests/hello_tests.e"
+    assert package["test_details"][0]["source_line"] == 12
+    assert package["stdout"] == "runner summary\n"
+    assert package["stderr"] == "runner warning\n"
+
+
+def test_test_rejects_conflicting_output_modes(tmp_path: Path, monkeypatch) -> None:
+    project = tmp_path / "hello"
+    runner = CliRunner()
+    assert runner.invoke(main, ["new", str(project)]).exit_code == 0
+    monkeypatch.chdir(project)
+
+    result = runner.invoke(main, ["test", "--raw", "--trace"])
+
+    assert result.exit_code == 1
+    assert "--json, --trace, and --raw are mutually exclusive" in result.output
 
 
 def test_import_preserves_all_targets_and_unknown_ecf_constructs(
@@ -171,17 +348,14 @@ def test_import_preserves_all_targets_and_unknown_ecf_constructs(
     )
 
     assert result.exit_code == 0, result.output
-    assert "Import level: lossless-with-overlay" in result.output
-    assert "retained as opaque ECF overlay entries" in result.output
+    assert "Import level: lossless" in result.output
+    assert "defined by the source legacy ECF" in result.output
     manifest = (destination / "Eiffel.toml").read_text()
     assert '[targets."release"]' in manifest
     assert 'extends = "default"' in manifest
     assert "../legacy/src" in manifest
     assert ecf.read_bytes() == before
     monkeypatch.chdir(destination)
-    diff = CliRunner().invoke(main, ["explain", "--ecf-diff"])
-    assert diff.exit_code == 0, diff.output
-    assert diff.output == "No semantic differences.\n"
     checked = CliRunner().invoke(main, ["check", "--configuration-only"])
     assert checked.exit_code == 0, checked.output
     assert ecf.read_bytes() == before
@@ -242,13 +416,12 @@ def test_import_preserves_system_level_unknown_construct(tmp_path: Path) -> None
     )
 
     assert result.exit_code == 0, result.output
-    assert "Import level: lossless-with-overlay" in result.output
-    overlay = etree.parse(str(destination / "config" / "imported.ecf"))
-    descriptions = overlay.xpath("/*/*[local-name()='description']")
-    assert descriptions[0].text == "Legacy system"
+    assert "Import level: lossless" in result.output
+    assert sorted(path.name for path in destination.iterdir()) == ["Eiffel.lock", "Eiffel.toml"]
+    assert b"<description>Legacy system</description>" in ecf.read_bytes()
 
 
-def test_import_classifies_doctype_as_partial_without_copying_it(tmp_path: Path) -> None:
+def test_import_keeps_doctype_only_in_source_legacy_ecf(tmp_path: Path) -> None:
     ecf = tmp_path / "doctype.ecf"
     ecf.write_text(
         "<!DOCTYPE system [<!ELEMENT system ANY>]>"
@@ -265,9 +438,9 @@ def test_import_classifies_doctype_as_partial_without_copying_it(tmp_path: Path)
     )
 
     assert result.exit_code == 0, result.output
-    assert "Import level: partial" in result.output
-    assert "document type declarations" in result.output
-    assert not (destination / "config" / "imported.ecf").exists()
+    assert "Import level: lossless" in result.output
+    assert sorted(path.name for path in destination.iterdir()) == ["Eiffel.lock", "Eiffel.toml"]
+    assert ecf.read_text().startswith("<!DOCTYPE system")
 
 
 def test_import_rejects_application_root_without_creation_feature(

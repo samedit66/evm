@@ -125,6 +125,10 @@ class Project:
         return self.manifest_path.parent
 
     @property
+    def default_target(self) -> str:
+        return self.targets[0].name
+
+    @property
     def configuration_directory(self) -> Path:
         return self.configuration_root or self.directory
 

@@ -78,6 +78,7 @@ class _ProjectMetadata:
     uuid: str
     ecf_path: Path
     ecf_managed: bool
+    default_target: str
 
 
 def find_manifest(start: Path | None = None) -> Path:
@@ -114,10 +115,10 @@ def parse_manifest(content: str, path: Path) -> Project:
     sources_table = _table(document, "sources")
     _reject_unknown(sources_table, {"clusters"}, "sources")
     sources = _string_list(sources_table.get("clusters"), "sources.clusters", required=True)
-    targets = [Target("default", root, sources)]
-    targets.extend(_parse_targets(document.get("targets"), metadata.kind))
+    targets = [Target(metadata.default_target, root, sources)]
+    targets.extend(_parse_targets(document.get("targets"), metadata.kind, metadata.default_target))
     test = _parse_test(document.get("test"), targets)
-    if test is None and (path.parent / "tests").is_dir():
+    if metadata.ecf_managed and test is None and (path.parent / "tests").is_dir():
         has_test_sources = any((path.parent / "tests").rglob("*.e"))
         if has_test_sources and not any(target.name == "test" for target in targets):
             targets.append(
@@ -125,7 +126,7 @@ def parse_manifest(content: str, path: Path) -> Project:
                     "test",
                     Root("TEST_APPLICATION", "make"),
                     ("tests",),
-                    "default",
+                    metadata.default_target,
                 )
             )
             test = TestConfiguration("test")
@@ -133,7 +134,11 @@ def parse_manifest(content: str, path: Path) -> Project:
 
     compilers = _parse_compilers(document.get("compatibility"))
     requires = _parse_requires(document.get("requires"))
-    conditions = _parse_conditions(document.get("conditions"), {target.name for target in targets})
+    conditions = _parse_conditions(
+        document.get("conditions"),
+        {target.name for target in targets},
+        metadata.default_target,
+    )
     compiler_arguments = _parse_compiler_arguments(document.get("compiler"))
     dependencies = _parse_dependencies(document.get("dependencies"), development=False)
     dependencies += _parse_dependencies(document.get("dev-dependencies"), development=True)
@@ -355,7 +360,7 @@ def _parse_project_metadata(
 ) -> _ProjectMetadata:
     _reject_unknown(
         project_table,
-        {"name", "version", "type", "uuid", "ecf-managed", "ecf"},
+        {"name", "version", "type", "uuid", "ecf-managed", "ecf", "default-target"},
         "project",
     )
     name = _required_string(project_table, "name", "project.name")
@@ -379,7 +384,18 @@ def _parse_project_metadata(
         if ecf_managed
         else (manifest_path.parent / ecf_name).resolve()
     )
-    return _ProjectMetadata(name, version, kind, project_uuid, ecf_path, ecf_managed)
+    default_target = project_table.get("default-target", "default")
+    if not isinstance(default_target, str) or _NAME_RE.fullmatch(default_target) is None:
+        raise EvmError("project.default-target must be a valid target name")
+    return _ProjectMetadata(
+        name,
+        version,
+        kind,
+        project_uuid,
+        ecf_path,
+        ecf_managed,
+        default_target,
+    )
 
 
 def _parse_uuid(value: str) -> str:
@@ -429,15 +445,15 @@ def _parse_root(value: Any, kind: str) -> Root | None:
     )
 
 
-def _parse_targets(value: Any, project_kind: str) -> list[Target]:
+def _parse_targets(value: Any, project_kind: str, default_target: str) -> list[Target]:
     if value is None:
         return []
     if not isinstance(value, Mapping):
         raise EvmError("targets must be a table")
     result: list[Target] = []
     for name, table in value.items():
-        if name == "default":
-            raise EvmError(f"targets.{name} is reserved")
+        if name == default_target:
+            raise EvmError(f"targets.{name} duplicates project.default-target")
         if not isinstance(table, Mapping):
             raise EvmError(f"targets.{name} must be a table")
         _reject_unknown(table, {"root", "sources", "extends"}, f"targets.{name}")
@@ -529,15 +545,27 @@ def _parse_requires(value: Any) -> tuple[tuple[str, str], ...]:
     return tuple(sorted(result))
 
 
-def _parse_conditions(value: Any, target_names: set[str]) -> tuple[Condition, ...]:
+def _parse_conditions(
+    value: Any,
+    target_names: set[str],
+    default_target: str,
+) -> tuple[Condition, ...]:
     if value is None:
         return ()
     if not isinstance(value, list):
         raise EvmError("conditions must use [[conditions]] array tables")
-    return tuple(_parse_condition(item, index, target_names) for index, item in enumerate(value))
+    return tuple(
+        _parse_condition(item, index, target_names, default_target)
+        for index, item in enumerate(value)
+    )
 
 
-def _parse_condition(item: Any, index: int, target_names: set[str]) -> Condition:
+def _parse_condition(
+    item: Any,
+    index: int,
+    target_names: set[str],
+    default_target: str,
+) -> Condition:
     path = f"conditions[{index}]"
     if not isinstance(item, Mapping):
         raise EvmError(f"{path} must be a table")
@@ -546,7 +574,7 @@ def _parse_condition(item: Any, index: int, target_names: set[str]) -> Condition
         {"target", "when", "sources", "external-objects"},
         path,
     )
-    target = item.get("target", "default")
+    target = item.get("target", default_target)
     if not isinstance(target, str) or target not in target_names:
         raise EvmError(f"{path}.target refers to unknown target {target!r}")
     when = _parse_condition_predicate(item.get("when"), path)

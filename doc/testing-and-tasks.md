@@ -51,6 +51,48 @@ AutoTest reports `passed`, `failed`, or `unresolved`. Failed and unresolved
 tests both make `evm test` return a nonzero exit code, while the summary retains
 separate counters for the two outcomes.
 
+The default report is optimized for locating a failure in source code. EVM
+matches the test class to an effective source cluster and, when the assertion
+tag is a unique string literal, reports the corresponding assertion line:
+
+```text
+FAILED GAUSSIAN_ELIMINIATION_TEST.test_solve_equation
+tests/gaussian_eliminiation_test.e:50
+    assert ("value2", l_algo.output[2,1] = -1.0)
+    Assertion failed: value2
+
+1 failed, 149 passed, 150 total in 11.73s
+```
+
+Source correlation is deliberately approximate. If a class, feature, or
+assertion tag cannot be resolved unambiguously, EVM reports the nearest
+reliable location and never presents a breakpoint slot as a source line.
+
+Use `--trace` for exception class, feature, code and tag, invalid-test and
+trace-validity flags, captured output, and the complete Eiffel stack trace.
+
+With `--json`, the same names are returned in the `failed_tests` and
+`unresolved_tests` arrays. `test_details` contains every diagnostic supplied by
+AutoTest: assertion tag, exception class and feature, exception code and tag,
+breakpoint slot, invalid-test and trace-validity classifications, captured
+output, process standard error, and the full stack trace. Fields unavailable
+from the compiler or framework are omitted. Successful source correlation adds
+`source_path`, `source_line`, and `source_text`.
+
+For `getest` and a compiled test target, EVM cannot reliably normalize every
+framework-specific diagnostic. It therefore preserves the runner's complete
+standard output and standard error in the terminal report and in the JSON
+`stdout` and `stderr` fields. Assertion locations and stack traces printed by
+those runners remain available for debugging instead of being reduced to an
+exit code.
+
+Use `--raw` when native runner output is more useful than normalization. For
+`getest` and compiled test targets, stdout and stderr are inherited directly.
+For AutoTest, which has no stable standalone console CLI, EVM's generated
+`EQA_TEST_EVALUATOR` runner prints the underlying EQA status, tag, output, and
+trace without EVM's summary or source correlation. `--json`, `--trace`, and
+`--raw` are mutually exclusive.
+
 ## Test filters
 
 Request a supported test class or feature:

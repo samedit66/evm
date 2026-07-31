@@ -12,11 +12,11 @@ from pathlib import Path
 
 from lxml import etree
 
-from evm.ecf import ECF_NAMESPACE, parse_ecf
+from evm.ecf import parse_ecf
 from evm.errors import EvmError
 from evm.filesystem import atomic_write
 from evm.model import BuildRequest, Project
-from evm.project import prepare_project
+from evm.project import prepare_compilation_project, prepare_project
 from evm.toolchains import (
     Toolchain,
     artifact_candidates,
@@ -27,12 +27,45 @@ from evm.toolchains import (
 
 _EIFFEL_IDENTIFIER_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
 _RESULT_PREFIX = "EVM_AUTOTEST_RESULT|"
+_ASSERTION_PREFIX = "EVM_AUTOTEST_ASSERTION|"
+_EXCEPTION_CLASS_PREFIX = "EVM_AUTOTEST_EXCEPTION_CLASS|"
+_EXCEPTION_FEATURE_PREFIX = "EVM_AUTOTEST_EXCEPTION_FEATURE|"
+_EXCEPTION_CODE_PREFIX = "EVM_AUTOTEST_EXCEPTION_CODE|"
+_EXCEPTION_TAG_PREFIX = "EVM_AUTOTEST_EXCEPTION_TAG|"
+_BREAKPOINT_SLOT_PREFIX = "EVM_AUTOTEST_BREAKPOINT_SLOT|"
+_TEST_INVALID_PREFIX = "EVM_AUTOTEST_TEST_INVALID|"
+_TRACE_VALID_PREFIX = "EVM_AUTOTEST_TRACE_VALID|"
+_OUTPUT_BEGIN = "EVM_AUTOTEST_OUTPUT_BEGIN"
+_OUTPUT_END = "EVM_AUTOTEST_OUTPUT_END"
+_TRACE_BEGIN = "EVM_AUTOTEST_TRACE_BEGIN"
+_TRACE_END = "EVM_AUTOTEST_TRACE_END"
 
 
 @dataclass(frozen=True, order=True)
 class AutoTestCase:
     class_name: str
     feature: str
+
+    @property
+    def qualified_name(self) -> str:
+        return f"{self.class_name}.{self.feature}"
+
+
+@dataclass(frozen=True)
+class AutoTestDiagnostic:
+    test_case: AutoTestCase
+    status: str
+    assertion: str | None = None
+    exception_class: str | None = None
+    exception_feature: str | None = None
+    exception_code: int | None = None
+    exception_tag: str | None = None
+    breakpoint_slot: int | None = None
+    test_invalid: bool | None = None
+    trace_valid: bool | None = None
+    output: str | None = None
+    stderr: str | None = None
+    trace: str | None = None
 
 
 @dataclass(frozen=True)
@@ -41,10 +74,26 @@ class AutoTestExecution:
     passed: int
     failed: int
     unresolved: int
+    diagnostics: tuple[AutoTestDiagnostic, ...] = ()
+
+    @property
+    def failed_tests(self) -> tuple[AutoTestCase, ...]:
+        return tuple(item.test_case for item in self.diagnostics if item.status == "failed")
+
+    @property
+    def unresolved_tests(self) -> tuple[AutoTestCase, ...]:
+        return tuple(item.test_case for item in self.diagnostics if item.status == "unresolved")
 
     @property
     def exit_code(self) -> int:
         return 0 if self.failed == 0 and self.unresolved == 0 else 1
+
+
+@dataclass(frozen=True)
+class AutoTestRunRequest:
+    class_name: str | None = None
+    feature: str | None = None
+    raw: bool = False
 
 
 @dataclass(frozen=True)
@@ -59,8 +108,7 @@ def run_autotest(
     project: Project,
     build_request: BuildRequest,
     toolchain: Toolchain,
-    class_name: str | None,
-    feature: str | None,
+    request: AutoTestRunRequest,
 ) -> AutoTestExecution:
     if toolchain.adapter != "ise":
         raise EvmError("AutoTest runner requires the ISE compiler adapter")
@@ -70,6 +118,7 @@ def run_autotest(
         release=build_request.release,
         offline=build_request.offline,
     )
+    compilation_project = prepare_compilation_project(project, toolchain)
     discovery_directory = prepare_build_directory(
         toolchain,
         project,
@@ -78,20 +127,35 @@ def run_autotest(
     )
     discovery = _DiscoveryContext(
         toolchain=toolchain,
-        project=project,
+        project=compilation_project,
         request=build_request,
         project_path=discovery_directory,
     )
     discovered = _discover_autotest_cases(discovery)
-    selected = _filter_autotest_cases(discovered, class_name, feature)
-    generated_project = _generate_runner_project(project, build_request, discovered)
+    selected = _filter_autotest_cases(discovered, request.class_name, request.feature)
+    generated_project = _generate_runner_project(
+        compilation_project,
+        build_request,
+        discovered,
+    )
     executable = _compile_runner(generated_project, build_request, toolchain)
-    statuses = tuple(_run_case(executable, project.directory, test_case) for test_case in selected)
+    if request.raw:
+        statuses = tuple(
+            _run_raw_case(executable, project.directory, test_case) for test_case in selected
+        )
+        diagnostics: tuple[AutoTestDiagnostic, ...] = ()
+    else:
+        results = tuple(
+            _run_case(executable, project.directory, test_case) for test_case in selected
+        )
+        statuses = tuple(result.status for result in results)
+        diagnostics = tuple(result for result in results if result.status != "passed")
     return AutoTestExecution(
         tests=len(statuses),
         passed=statuses.count("passed"),
         failed=statuses.count("failed"),
         unresolved=statuses.count("unresolved"),
+        diagnostics=diagnostics,
     )
 
 
@@ -212,6 +276,7 @@ def _generate_runner_project(
     atomic_write(ecf_path, _runner_ecf(project.ecf_path, request.target, source_directory))
     return dataclasses.replace(
         project,
+        kind="application",
         ecf_path=ecf_path,
         ecf_managed=False,
         build_root=autotest_directory / "build",
@@ -220,6 +285,7 @@ def _generate_runner_project(
 
 def _runner_ecf(ecf_path: Path, target_name: str, source_directory: Path) -> bytes:
     root = parse_ecf(ecf_path).getroot()
+    namespace = etree.QName(root).namespace
     _make_locations_absolute(root, ecf_path.parent)
     targets = root.xpath(
         "/*[local-name()='system']/*[local-name()='target'][@name=$name]",
@@ -233,21 +299,21 @@ def _runner_ecf(ecf_path: Path, target_name: str, source_directory: Path) -> byt
     target.insert(
         0,
         etree.Element(
-            f"{{{ECF_NAMESPACE}}}root",
+            f"{{{namespace}}}root",
             **{"class": "EVM_AUTOTEST_APPLICATION", "feature": "make"},
         ),
     )
     if not _inherits_testing_library(root, target):
         etree.SubElement(
             target,
-            f"{{{ECF_NAMESPACE}}}library",
+            f"{{{namespace}}}library",
             name="testing",
             location="${ISE_LIBRARY}/library/testing/testing.ecf",
             readonly="true",
         )
     etree.SubElement(
         target,
-        f"{{{ECF_NAMESPACE}}}cluster",
+        f"{{{namespace}}}cluster",
         name="evm_autotest_generated",
         location=str(source_directory),
         recursive="false",
@@ -284,7 +350,7 @@ def _compile_runner(
     request: BuildRequest,
     toolchain: Toolchain,
 ) -> Path:
-    build_directory = prepare_build_directory(toolchain, project, request)
+    build_directory = prepare_build_directory(toolchain, project, request, clean=True)
     command = compiler_command(toolchain, project, request)
     run_compiler(command, build_directory, capture_output=True)
     executable = next(
@@ -300,7 +366,11 @@ def _compile_runner(
     return executable
 
 
-def _run_case(executable: Path, working_directory: Path, test_case: AutoTestCase) -> str:
+def _run_case(
+    executable: Path,
+    working_directory: Path,
+    test_case: AutoTestCase,
+) -> AutoTestDiagnostic:
     completed = subprocess.run(
         [str(executable), test_case.class_name, test_case.feature],
         cwd=working_directory,
@@ -319,13 +389,83 @@ def _run_case(executable: Path, working_directory: Path, test_case: AutoTestCase
             f"AutoTest runner returned an invalid result for "
             f"{test_case.class_name}.{test_case.feature}\n{details}"
         )
-    expected_exit_code = 0 if statuses[0] == "passed" else 1
+    expected_exit_code = {"passed": 0, "failed": 1, "unresolved": 2}[statuses[0]]
     if completed.returncode != expected_exit_code:
         raise EvmError(
             f"AutoTest runner exited with {completed.returncode} for "
             f"{test_case.class_name}.{test_case.feature}"
         )
-    return statuses[0]
+    return AutoTestDiagnostic(
+        test_case=test_case,
+        status=statuses[0],
+        assertion=_prefixed_value(completed.stdout, _ASSERTION_PREFIX),
+        exception_class=_prefixed_value(completed.stdout, _EXCEPTION_CLASS_PREFIX),
+        exception_feature=_prefixed_value(completed.stdout, _EXCEPTION_FEATURE_PREFIX),
+        exception_code=_prefixed_integer(completed.stdout, _EXCEPTION_CODE_PREFIX),
+        exception_tag=_prefixed_value(completed.stdout, _EXCEPTION_TAG_PREFIX),
+        breakpoint_slot=_prefixed_positive_integer(
+            completed.stdout,
+            _BREAKPOINT_SLOT_PREFIX,
+        ),
+        test_invalid=_prefixed_boolean(completed.stdout, _TEST_INVALID_PREFIX),
+        trace_valid=_prefixed_boolean(completed.stdout, _TRACE_VALID_PREFIX),
+        output=_marked_section(completed.stdout, _OUTPUT_BEGIN, _OUTPUT_END),
+        stderr=completed.stderr.strip() or None,
+        trace=_marked_section(completed.stdout, _TRACE_BEGIN, _TRACE_END),
+    )
+
+
+def _run_raw_case(
+    executable: Path,
+    working_directory: Path,
+    test_case: AutoTestCase,
+) -> str:
+    completed = subprocess.run(
+        [str(executable), test_case.class_name, test_case.feature, "--raw"],
+        cwd=working_directory,
+        check=False,
+    )
+    statuses = {0: "passed", 1: "failed", 2: "unresolved"}
+    if completed.returncode not in statuses:
+        raise EvmError(
+            f"AutoTest runner exited with {completed.returncode} for {test_case.qualified_name}"
+        )
+    return statuses[completed.returncode]
+
+
+def _prefixed_value(output: str, prefix: str) -> str | None:
+    values = [line.removeprefix(prefix) for line in output.splitlines() if line.startswith(prefix)]
+    return values[0] if values and values[0] else None
+
+
+def _prefixed_integer(output: str, prefix: str) -> int | None:
+    value = _prefixed_value(output, prefix)
+    return int(value) if value is not None and value.isdigit() else None
+
+
+def _prefixed_positive_integer(output: str, prefix: str) -> int | None:
+    value = _prefixed_integer(output, prefix)
+    return value if value is not None and value > 0 else None
+
+
+def _prefixed_boolean(output: str, prefix: str) -> bool | None:
+    value = _prefixed_value(output, prefix)
+    if value == "true":
+        return True
+    if value == "false":
+        return False
+    return None
+
+
+def _marked_section(output: str, begin: str, end: str) -> str | None:
+    lines = output.splitlines()
+    try:
+        first = lines.index(begin) + 1
+        last = lines.index(end, first)
+    except ValueError:
+        return None
+    value = "\n".join(lines[first:last]).strip()
+    return value or None
 
 
 def _runner_source(cases: tuple[AutoTestCase, ...]) -> str:
@@ -352,7 +492,10 @@ feature {{NONE}} -- Initialization
 
     make
         do
-            if argument_count = 2 then
+            if
+                argument_count = 2 or else
+                (argument_count = 3 and then argument (3).same_string ("--raw"))
+            then
 {branches}
                 else
                     die (2)
@@ -369,20 +512,172 @@ feature {{NONE}} -- Execution
 {invocations}
 
     report (test_result: EQA_PARTIAL_RESULT)
+        local
+            test_exception: detachable EQA_TEST_INVOCATION_EXCEPTION
         do
-            io.put_string ("{_RESULT_PREFIX}")
-            if test_result.is_pass then
-                io.put_string ("passed")
-            elseif test_result.is_fail then
-                io.put_string ("failed")
+            if argument_count = 3 then
+                report_raw (test_result)
             else
-                io.put_string ("unresolved")
+                io.put_string ("{_RESULT_PREFIX}")
+                if test_result.is_pass then
+                    io.put_string ("passed")
+                elseif test_result.is_fail then
+                    io.put_string ("failed")
+                else
+                    io.put_string ("unresolved")
+                end
+                io.put_new_line
+                if not test_result.is_pass then
+                    if not test_result.tag.is_empty then
+                        report_string_32 ("{_ASSERTION_PREFIX}", test_result.tag)
+                    end
+                    if attached test_result.setup_response.exception as setup_exception then
+                        test_exception := setup_exception
+                    elseif attached {{EQA_RESULT}} test_result as full_result then
+                        if attached full_result.test_response.exception as feature_exception then
+                            test_exception := feature_exception
+                        elseif
+                            attached full_result.teardown_response.exception as teardown_exception
+                        then
+                            test_exception := teardown_exception
+                        end
+                    end
+                    if attached test_exception as reported_exception then
+                        report_string_8 (
+                            "{_EXCEPTION_CLASS_PREFIX}", reported_exception.class_name
+                        )
+                        report_string_8 (
+                            "{_EXCEPTION_FEATURE_PREFIX}", reported_exception.recipient_name
+                        )
+                        report_string_8 (
+                            "{_EXCEPTION_CODE_PREFIX}", reported_exception.code.out
+                        )
+                        report_string_32 (
+                            "{_EXCEPTION_TAG_PREFIX}", reported_exception.tag_name
+                        )
+                        report_string_8 (
+                            "{_BREAKPOINT_SLOT_PREFIX}",
+                            reported_exception.break_point_slot.out
+                        )
+                        io.put_string ("{_TEST_INVALID_PREFIX}")
+                        if reported_exception.is_test_invalid then
+                            io.put_string ("true")
+                        else
+                            io.put_string ("false")
+                        end
+                        io.put_new_line
+                        io.put_string ("{_TRACE_VALID_PREFIX}")
+                        if reported_exception.is_trace_valid then
+                            io.put_string ("true")
+                        else
+                            io.put_string ("false")
+                        end
+                        io.put_new_line
+                        if not reported_exception.trace.is_empty then
+                            report_section_32 (
+                                "{_TRACE_BEGIN}", reported_exception.trace, "{_TRACE_END}"
+                            )
+                        end
+                    end
+                    if not test_result.output.is_empty then
+                        report_section_8 (
+                            "{_OUTPUT_BEGIN}", test_result.output, "{_OUTPUT_END}"
+                        )
+                    end
+                end
             end
-            io.put_new_line
             io.output.flush
-            if not test_result.is_pass then
+            if test_result.is_fail then
                 die (1)
+            elseif test_result.is_unresolved then
+                die (2)
             end
+        end
+
+    report_raw (test_result: EQA_PARTIAL_RESULT)
+        local
+            test_exception: detachable EQA_TEST_INVOCATION_EXCEPTION
+        do
+            if test_result.is_pass then
+                io.put_string ("PASS ")
+            elseif test_result.is_fail then
+                io.put_string ("FAIL ")
+            else
+                io.put_string ("UNRESOLVED ")
+            end
+            io.put_string_32 (argument (1))
+            io.put_character ('.')
+            io.put_string_32 (argument (2))
+            io.put_new_line
+            if not test_result.tag.is_empty then
+                report_string_32 ("Assertion: ", test_result.tag)
+            end
+            if attached test_result.setup_response.exception as setup_exception then
+                test_exception := setup_exception
+            elseif attached {{EQA_RESULT}} test_result as full_result then
+                if attached full_result.test_response.exception as feature_exception then
+                    test_exception := feature_exception
+                elseif attached full_result.teardown_response.exception as teardown_exception then
+                    test_exception := teardown_exception
+                end
+            end
+            if attached test_exception as reported_exception then
+                report_string_8 ("Exception class: ", reported_exception.class_name)
+                report_string_8 ("Exception feature: ", reported_exception.recipient_name)
+                report_string_32 ("Exception tag: ", reported_exception.tag_name)
+                if not reported_exception.trace.is_empty then
+                    io.put_string ("Trace:%N")
+                    io.put_string_32 (reported_exception.trace)
+                    io.put_new_line
+                end
+            end
+            if not test_result.output.is_empty then
+                io.put_string ("Output:%N")
+                io.put_string (test_result.output)
+                io.put_new_line
+            end
+        end
+
+    report_string_8 (prefix, value: READABLE_STRING_8)
+        do
+            io.put_string (prefix)
+            io.put_string (value)
+            io.put_new_line
+        end
+
+    report_string_32 (prefix: READABLE_STRING_8; value: READABLE_STRING_32)
+        do
+            io.put_string (prefix)
+            io.put_string_32 (value)
+            io.put_new_line
+        end
+
+    report_section_8 (
+        opening: READABLE_STRING_8;
+        value: READABLE_STRING_8;
+        closing: READABLE_STRING_8
+    )
+        do
+            io.put_string (opening)
+            io.put_new_line
+            io.put_string (value)
+            io.put_new_line
+            io.put_string (closing)
+            io.put_new_line
+        end
+
+    report_section_32 (
+        opening: READABLE_STRING_8;
+        value: READABLE_STRING_32;
+        closing: READABLE_STRING_8
+    )
+        do
+            io.put_string (opening)
+            io.put_new_line
+            io.put_string_32 (value)
+            io.put_new_line
+            io.put_string (closing)
+            io.put_new_line
         end
 
 end

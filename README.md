@@ -102,6 +102,15 @@ To initialize the current directory without overwriting existing files:
 $ evm init
 ```
 
+If the directory already contains an ECF, migrate it instead:
+
+```console
+$ evm import project.ecf
+```
+
+This adds only `Eiffel.toml` and `Eiffel.lock`; the original ECF remains the
+native source of truth. See [Migrating existing projects](doc/migrating-existing-projects.md).
+
 ### Add a dependency
 
 IRON is the default package source:
@@ -178,6 +187,7 @@ lives in [`doc/`](doc/).
 | [Package management](doc/dependencies.md) | Dependency sources, locking, installation, updates, graph inspection, and offline mode |
 | [Toolchains](doc/toolchains.md) | ISE and Gobo discovery, selection, capabilities, and build output |
 | [ECF interoperability](doc/ecf.md) | Managed ECF, overlays, legacy mode, and importing existing projects |
+| [Migrating existing projects](doc/migrating-existing-projects.md) | Adopt EVM without replacing an existing ECF |
 | [Testing and tasks](doc/testing-and-tasks.md) | Test target selection, filters, and manifest-defined workflows |
 | [Workspaces and CI](doc/workspaces-and-ci.md) | Multi-package repositories, package selection, JSON output, and reproducible CI |
 | [CLI reference](doc/cli-reference.md) | Every public command and option |
