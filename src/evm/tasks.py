@@ -17,7 +17,7 @@ _PUBLIC_COMMANDS = {
     "check",
     "clean",
     "deps",
-    "doctor",
+    "discover",
     "explain",
     "import",
     "init",

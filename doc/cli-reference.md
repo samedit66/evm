@@ -7,7 +7,7 @@ internal stages such as resolution, fetching, or ECF generation.
 new      init
 add      remove   update   install   deps
 build    run      test     check     clean
-doctor   explain  import   task
+discover explain  import   task
 ```
 
 Use `evm COMMAND --help` for the help bundled with the installed version.
@@ -125,12 +125,12 @@ Options:
   --help
 ```
 
-## `evm doctor`
+## `evm discover`
 
-Diagnose installed Eiffel toolchains and their environments.
+Discover installed Eiffel components and native C toolchains.
 
 ```text
-evm doctor [OPTIONS]
+evm discover [OPTIONS]
 
 Options:
   --json    Emit stable JSON for CI.
@@ -298,7 +298,7 @@ are mutually exclusive.
 | `run` | An up-to-date application is executed |
 | `test` | The configured tests are built and executed |
 | `clean` | Explicitly selected derived state is removed |
-| `doctor` | The external Eiffel environment is diagnosed |
+| `discover` | Local Eiffel and C components are inventoried |
 | `explain` | Effective configuration or an ECF difference is displayed |
 | `import` | An initial project is created from an existing ECF |
 | `task` | A manifest-defined workflow is executed |

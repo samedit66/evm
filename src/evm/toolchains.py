@@ -106,7 +106,7 @@ def select_toolchain(project: Project, explicit: str | None = None) -> Toolchain
             policy.reason,
         )
     details = "\n".join(f"  - {item}" for item in rejected)
-    raise EvmError(f"no compatible Eiffel toolchain found:\n{details}\nrun `evm doctor`")
+    raise EvmError(f"no compatible Eiffel toolchain found:\n{details}\nrun `evm discover`")
 
 
 def _selection_policy(project: Project, explicit: str | None) -> _SelectionPolicy:
@@ -266,34 +266,6 @@ def artifact_candidates(
         code = "F_code" if request.release else "W_code"
         return (base / "EIFGENs" / request.target / code / executable,)
     return (base / executable, base / request.target, base / f"{request.target}.exe")
-
-
-def doctor_lines() -> tuple[list[str], bool]:
-    lines = ["Toolchains:"]
-    healthy = True
-    for adapter, detected in detect_all().items():
-        if detected.executable is None or detected.version is None:
-            healthy = False
-            lines.append(f"✗ {adapter}: {detected.error}")
-            continue
-        lines.append(f"✓ {adapter}: {detected.executable} ({detected.version})")
-        if adapter == "ise":
-            for variable in ("ISE_EIFFEL", "ISE_PLATFORM"):
-                if os.environ.get(variable):
-                    lines.append(f"  ✓ {variable} is defined")
-                else:
-                    healthy = False
-                    lines.append(f"  ✗ {variable} is not defined")
-        else:
-            if os.environ.get("GOBO"):
-                lines.append("  ✓ GOBO is defined")
-            else:
-                healthy = False
-                lines.append("  ✗ GOBO is not defined")
-            for optional in ("gecc", "gelint", "getest"):
-                marker = "✓" if shutil.which(optional) else "!"
-                lines.append(f"  {marker} {optional} {'found' if marker == '✓' else 'not found'}")
-    return lines, healthy
 
 
 def _validate_adapter(adapter: str) -> None:

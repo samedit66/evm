@@ -687,7 +687,7 @@ Toolchain выбирается в следующем строгом порядк
 
 Порядок обнаружения executable в `PATH` НЕ ДОЛЖЕН влиять на приоритет
 adapters. Если подходящих кандидатов нет, EVM ДОЛЖЕН завершиться до сборки с
-диагностикой причин отклонения и рекомендацией `evm doctor`.
+диагностикой причин отклонения и рекомендацией `evm discover`.
 
 Локальный выбор executable и compiler-specific defaults НЕ ДОЛЖЕН попадать в
 `Eiffel.lock`. Специальный `.evm/config.toml` для выбора compiler НЕ
@@ -1234,7 +1234,7 @@ CLI ДОЛЖЕН:
 new      init
 add      remove   update   install   deps
 build    run      test     check     clean
-doctor   explain  import   task
+discover explain  import   task
 ```
 
 Редкие операции СЛЕДУЕТ выражать флагами этих команд либо помещать в
@@ -1254,7 +1254,7 @@ doctor   explain  import   task
 | `test` | Тесты собраны и выполнены |
 | `check` | Проект проверен без требования финального артефакта |
 | `clean` | Удалено явно выбранное производное состояние |
-| `doctor` | Проверено внешнее окружение |
+| `discover` | Обнаружены и описаны локальные Eiffel- и C-компоненты |
 | `explain` | Показана эффективная конфигурация или ее аспект |
 | `import` | Legacy ECF преобразован в начальный EVM-проект |
 | `task` | Выполнен объявленный проектный workflow |
@@ -1421,48 +1421,59 @@ Runner: getest
 ### 11.6. Диагностика
 
 ```shell
-evm doctor
+evm discover
 evm check
 evm check --configuration-only
 evm explain --json
 ```
 
-`evm doctor` ДОЛЖЕН проверять окружение:
+`evm discover` ДОЛЖЕН без изменения системы инвентаризировать доступные
+компоненты Eiffel и native C toolchain. Отсутствие компонентов является
+корректным пустым результатом, а не ошибкой выполнения discovery:
 
 ```text
-Toolchains:
+Eiffel components:
 
 ✓ Gobo Eiffel Compiler 26.06.30
-  ✓ gec found
-  ✓ GOBO is defined
-  ✓ C backend = Zig
-  ✓ Boehm GC available
-  ! SCOOP support is partial
+  path: /opt/gobo/bin/gec
+  source: PATH, GOBO
 
 ✓ ISE Eiffel 25.12
-  ✓ ec found
-  ✓ ISE_EIFFEL is defined
-  ✓ ISE_PLATFORM = linux-x86-64
+  path: /opt/eiffelstudio/studio/spec/linux-x86-64/bin/ec
+  source: PATH, ISE_EIFFEL
 
-Dependency sources:
+C toolchains:
 
-✓ Gobo libraries
-✓ ISE libraries
-✓ Git
-! IRON repository index is outdated
+✓ Clang 19.1.0
+  path: /usr/bin/clang
+  active: yes
 ```
 
-Минимальный набор проверок:
+Минимальный каталог discovery ДОЛЖЕН включать `ec`, `gec`, `gecc`, `gelint`,
+`getest`, `iron`, GCC, Clang, Apple Clang, MSVC, `clang-cl` и Zig. Команда
+ДОЛЖНА проверять известные переменные `ISE_EIFFEL`, `ISE_PLATFORM`,
+`ISE_LIBRARY`, `GOBO` и `EVM_COMPILER`, не раскрывая значения неизвестных или
+чувствительных переменных.
 
-- наличие и версии каждой заявленной или явно выбранной toolchain;
-- наличие и корректность `ISE_EIFFEL`, `ISE_PLATFORM` и `GOBO`;
-- наличие ISE- и Gobo-библиотек;
-- наличие совместимого C backend для выбранной toolchain;
-- доступность `gecc`, `gelint` и `getest`, если они требуются;
-- capability matrix для обнаруженных версий компиляторов;
-- доступность project-local `.evm/` для записи;
-- согласованность `.evm/state.toml`, `.evm/deps/` и `Eiffel.lock`;
-- доступность и актуальность необходимых индексов пакетов.
+На Unix EVM ДОЛЖЕН учитывать executable bit и символические ссылки. На macOS
+EVM ДОЛЖЕН дополнительно использовать активные Apple developer tools через
+`xcrun`, не изменяя выбранный Xcode. На Windows EVM ДОЛЖЕН учитывать `PATHEXT`,
+регистронезависимое сравнение путей и установки MSVC, найденные через Visual
+Studio discovery. Найденная, но не активированная установка MSVC ДОЛЖНА
+отличаться от `cl.exe`, доступного в текущем `PATH`.
+
+Discovery ДОЛЖЕН перечислять все известные совпадения непосредственно в
+каталогах `PATH`, объединять физические дубликаты, отмечать первый кандидат
+как active, а последующие как shadowed. Рекурсивный запуск произвольных файлов
+НЕ ДОПУСКАЕТСЯ. Version probing ДОЛЖЕН использовать только известные команды,
+ограниченный вывод, timeout и запуск без shell. Ошибка отдельного probe НЕ
+ДОЛЖНА прерывать полный поиск.
+
+Структурированный результат ДОЛЖЕН разделять availability компонента и уровень
+его поддержки EVM. `--json` ДОЛЖЕН содержать версию схемы, платформу,
+компоненты, источники обнаружения, окружение и диагностику в детерминированном
+порядке. `evm discover` возвращает `0`, если discovery завершен, включая пустой
+результат, и ненулевой код только при ошибке самой операции discovery.
 
 `evm check` ДОЛЖЕН выполнить конфигурационные проверки, установить
 зафиксированные зависимости, сгенерировать или проверить ECF и запустить
@@ -2159,8 +2170,9 @@ evm build
     возможностей.
 17. Встроенный release-режим преобразуется в `ec ... -finalize` и
     `gec ... --finalize` без включения ISE-specific режима в общую модель.
-18. `evm doctor` отдельно диагностирует ISE и Gobo, включая переменные
-    окружения, версии и C backend.
+18. `evm discover` на Unix, macOS и Windows инвентаризирует ISE, Gobo,
+    вспомогательные Eiffel-компоненты и доступные C toolchain, объединяет
+    результаты из окружения и `PATH` и различает active и shadowed кандидаты.
 19. Обязательная неподдерживаемая capability останавливает сборку до запуска
     компилятора; partial capability создает диагностируемый результат согласно
     политике проекта.
@@ -2236,7 +2248,7 @@ evm build
 - встроенные dev/release modes и внутренняя capability matrix;
 - стабильный UUID, conditions и version constraints;
 - `new`, `init`, `check`, `build`, `run`;
-- `doctor`, `explain`, `import`.
+- `discover`, `explain`, `import`.
 
 ### Этап 2. Зависимости
 

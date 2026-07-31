@@ -294,5 +294,21 @@ def test_main_help_lists_stage_one_commands() -> None:
     result = CliRunner().invoke(main, ["--help"])
 
     assert result.exit_code == 0
-    for command in ("new", "init", "check", "build", "run", "doctor", "explain", "import"):
+    for command in (
+        "new",
+        "init",
+        "check",
+        "build",
+        "run",
+        "discover",
+        "explain",
+        "import",
+    ):
         assert command in result.output
+
+
+def test_doctor_command_is_not_available() -> None:
+    result = CliRunner().invoke(main, ["doctor"])
+
+    assert result.exit_code != 0
+    assert "No such command 'doctor'" in result.output

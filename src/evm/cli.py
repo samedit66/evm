@@ -20,6 +20,7 @@ from evm.dependency_commands import (
     remove_dependency,
     update_dependencies,
 )
+from evm.discovery import discover_environment, discovery_lines
 from evm.ecf import semantic_diff
 from evm.errors import EvmError
 from evm.lockfile import LOCK_NAME, load_lock
@@ -36,7 +37,6 @@ from evm.project import (
 )
 from evm.tasks import run_task
 from evm.testing import TestRequest, test_project
-from evm.toolchains import doctor_lines
 from evm.workspace import ProjectContext, load_project_context, workspace_tree_lines
 
 
@@ -252,38 +252,16 @@ def run_command(
         raise click.exceptions.Exit(exit_code)
 
 
-@main.command("doctor")
+@main.command("discover")
 @click.option("--json", "output_json", is_flag=True, help="Emit stable JSON for CI.")
 @command_errors
-def doctor_command(output_json: bool) -> None:
-    """Diagnose installed Eiffel toolchains and their environments."""
-    lines, healthy = doctor_lines()
+def discover_command(output_json: bool) -> None:
+    """Discover installed Eiffel components and native C toolchains."""
+    result = discover_environment()
     if output_json:
-        click.echo(
-            json.dumps(
-                {
-                    "status": "passed" if healthy else "failed",
-                    "diagnostics": [
-                        {
-                            "level": (
-                                "error"
-                                if line.startswith("✗")
-                                else "warning"
-                                if line.lstrip().startswith("!")
-                                else "info"
-                            ),
-                            "message": line.strip(),
-                        }
-                        for line in lines[1:]
-                    ],
-                },
-                sort_keys=True,
-            )
-        )
+        click.echo(json.dumps(result.to_dict(), sort_keys=True))
     else:
-        click.echo("\n".join(lines))
-    if not healthy:
-        raise click.exceptions.Exit(1)
+        click.echo("\n".join(discovery_lines(result)))
 
 
 @main.command("explain")

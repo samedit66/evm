@@ -33,13 +33,13 @@ $ python3.14 -m pip install .
 $ evm --version
 ```
 
-## Diagnose the environment
+## Discover the environment
 
 After installation, inspect compiler discovery and required environment
 variables:
 
 ```console
-$ evm doctor
+$ evm discover
 ```
 
 ISE Eiffel normally exposes:
@@ -51,13 +51,14 @@ Gobo Eiffel normally exposes:
 
 - `GOBO`.
 
-`doctor` reports detected compiler versions and returns a non-zero exit status
-when no healthy supported toolchain is available.
+`discover` inventories Eiffel components and native C toolchains from the
+environment, `PATH`, and platform-specific sources. An empty inventory is a
+successful result; use `evm check` to validate a project against a compiler.
 
 For machine-readable diagnostics:
 
 ```console
-$ evm doctor --json
+$ evm discover --json
 ```
 
 See [Toolchains](toolchains.md) for compiler selection and capability handling.

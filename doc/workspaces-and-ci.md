@@ -56,7 +56,7 @@ out of the workspace requires a new install and generation in the new root.
 CI-oriented commands expose stable machine-readable output:
 
 ```console
-$ evm doctor --json
+$ evm discover --json
 $ evm check --json
 $ evm build --json
 $ evm test --json
@@ -71,7 +71,7 @@ A typical sequence is:
 
 ```console
 $ evm install --locked
-$ evm doctor --json
+$ evm discover --json
 $ evm check --compiler ise --json
 $ evm test --compiler ise --json
 $ evm build --compiler ise --release --json

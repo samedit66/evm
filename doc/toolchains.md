@@ -8,16 +8,18 @@ adapters for ISE Eiffel and Gobo Eiffel.
 | `ise` | `ec` | EiffelBase |
 | `gobo` | `gec` | FreeELKS |
 
-## Diagnose installations
+## Discover installations
 
 ```console
-$ evm doctor
-$ evm doctor --json
+$ evm discover
+$ evm discover --json
 ```
 
 ISE normally uses `ISE_EIFFEL` and `ISE_PLATFORM`; Gobo uses `GOBO`.
-`doctor` reports compiler versions, discovery results, and missing environment
-variables.
+`discover` reports every known Eiffel and C compiler found in `PATH`, discovery
+results from environment variables, active and shadowed installations, and
+platform-specific results such as Apple Clang or Visual Studio. It supports
+Unix, macOS, and Windows without modifying the system.
 
 ## Select a compiler
 
@@ -100,5 +102,5 @@ or only partially supported.
 | Conventional test target | ✓ | ✓ |
 | `getest` integration | — | When available |
 
-Use `evm doctor` for the installed environment and `evm explain` for the
+Use `evm discover` for the installed environment and `evm explain` for the
 effective project configuration.
