@@ -37,6 +37,11 @@ def test_new_creates_application_and_stable_ecf(tmp_path: Path, monkeypatch) -> 
     assert etree.QName(root).namespace == ECF_NAMESPACE
     assert root.get("name") == "hello"
     assert root.get("uuid")
+    concurrency = root.xpath(
+        "./*[local-name()='target']/*[local-name()='capability']/*[local-name()='concurrency']"
+    )[0]
+    assert concurrency.get("support") == "none"
+    assert concurrency.get("use") is None
     monkeypatch.chdir(project)
 
     checked = runner.invoke(main, ["check", "--configuration-only"], catch_exceptions=False)
@@ -56,6 +61,22 @@ def test_new_library_has_all_classes_root(tmp_path: Path) -> None:
     assert root.get("library_target") == "default"
     roots = root.xpath("./*[local-name()='target']/*[local-name()='root']")
     assert roots[0].get("all_classes") == "true"
+
+
+def test_new_scoop_project_declares_scoop_support(tmp_path: Path) -> None:
+    project = tmp_path / "concurrent"
+
+    result = CliRunner().invoke(main, ["new", str(project), "--scoop"])
+
+    assert result.exit_code == 0, result.output
+    loaded = load_manifest(project / "Eiffel.toml")
+    assert dict(loaded.requires)["concurrency"] == "scoop"
+    root = etree.parse(str(project / "concurrent.ecf")).getroot()
+    concurrency = root.xpath(
+        "./*[local-name()='target']/*[local-name()='capability']/*[local-name()='concurrency']"
+    )[0]
+    assert concurrency.get("support") == "scoop"
+    assert concurrency.get("use") == "scoop"
 
 
 def test_init_preserves_existing_gitignore(tmp_path: Path, monkeypatch) -> None:

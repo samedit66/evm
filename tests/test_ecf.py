@@ -33,6 +33,21 @@ def test_semantic_diff_ignores_xml_formatting_and_management_comment(
     assert semantic_diff(project) == "No semantic differences.\n"
 
 
+def test_explicit_non_scoop_requirement_sets_support_and_use(tmp_path: Path) -> None:
+    project = create_project(tmp_path / "hello")
+    project.manifest_path.write_text(
+        project.manifest_path.read_text() + '\n[requires]\nconcurrency = "none"\n'
+    )
+
+    generated = etree.fromstring(generate_ecf(load_manifest(project.manifest_path)))
+
+    concurrency = generated.xpath(
+        "./*[local-name()='target']/*[local-name()='capability']/*[local-name()='concurrency']"
+    )[0]
+    assert concurrency.get("support") == "none"
+    assert concurrency.get("use") == "none"
+
+
 def test_semantic_summary_does_not_resolve_external_entities(tmp_path: Path) -> None:
     secret = tmp_path / "secret.txt"
     secret.write_text("must-not-be-read")

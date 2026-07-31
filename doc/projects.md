@@ -14,6 +14,16 @@ Create a library:
 $ evm new shared --lib
 ```
 
+New targets explicitly declare non-SCOOP concurrency support. Enable SCOOP
+when creating a project that requires it:
+
+```console
+$ evm new concurrent_service --scoop
+```
+
+This records `concurrency = "scoop"` in `[requires]`; omitting the option keeps
+the target compatible with libraries that support only non-SCOOP execution.
+
 Initialize an existing directory without overwriting its files:
 
 ```console

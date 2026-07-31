@@ -623,6 +623,8 @@ ise-semantics = "25.12"
 
 Отрицательные записи вроде `debugger = false` или `dotnet = false` НЕ СЛЕДУЕТ
 хранить: отсутствие требования означает, что capability проекту не нужна.
+Это не отменяет консервативный ECF default: при отсутствии требования managed
+target сообщает `concurrency support="none"`; SCOOP включается только явно.
 
 `[compatibility]` и `[requires]` являются независимыми необязательными
 секциями:
@@ -1316,6 +1318,7 @@ discover explain  import   task
 ```shell
 evm new my_app
 evm new my_library --lib
+evm new concurrent_app --scoop
 evm init
 ```
 
@@ -1327,6 +1330,11 @@ evm init
 - начальный `Eiffel.lock`;
 - совместимый ECF;
 - стандартные каталоги исходного кода и тестов.
+
+Managed ECF, созданный без явного concurrency requirement, ДОЛЖЕН объявлять
+`concurrency support="none"`, чтобы обычный проект не становился SCOOP-клиентом
+неявно. `evm new --scoop` ДОЛЖЕН сохранить `concurrency = "scoop"` в секции
+`[requires]` и создать ECF с `concurrency support="scoop" use="scoop"`.
 
 `evm init` ДОЛЖЕН инициализировать проект в существующем каталоге, не
 перезаписывая пользовательские файлы без явного разрешения.

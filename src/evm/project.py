@@ -80,7 +80,13 @@ class _ProjectFiles:
     source: Path
 
 
-def create_project(directory: Path, *, library: bool = False, initialize: bool = False) -> Project:
+def create_project(
+    directory: Path,
+    *,
+    library: bool = False,
+    initialize: bool = False,
+    scoop: bool = False,
+) -> Project:
     directory = directory.resolve()
     if directory.exists() and not directory.is_dir():
         raise EvmError(f"project path is not a directory: {directory}")
@@ -89,7 +95,7 @@ def create_project(directory: Path, *, library: bool = False, initialize: bool =
     files = _project_files(directory, name, library)
     _ensure_scaffold_available(files, initialize)
     project_uuid = str(uuid.uuid4())
-    manifest = _new_manifest(name, project_uuid, library)
+    manifest = _new_manifest(name, project_uuid, library, scoop)
     source = _library_source(name) if library else _application_source()
     project = parse_manifest(manifest, directory / "Eiffel.toml")
     lock = empty_lock(project)
@@ -698,7 +704,7 @@ def _is_absolute_ecf_path(location: str) -> bool:
     return Path(location).is_absolute() or PureWindowsPath(location).is_absolute()
 
 
-def _new_manifest(name: str, uuid_value: str, library: bool) -> str:
+def _new_manifest(name: str, uuid_value: str, library: bool, scoop: bool) -> str:
     kind = "library" if library else "application"
     result = (
         "[project]\n"
@@ -712,6 +718,8 @@ def _new_manifest(name: str, uuid_value: str, library: bool) -> str:
     if not library:
         result += '\n[root]\nclass = "APPLICATION"\nfeature = "make"\n'
     result += '\n[sources]\nclusters = ["src"]\n'
+    if scoop:
+        result += '\n[requires]\nconcurrency = "scoop"\n'
     return result
 
 

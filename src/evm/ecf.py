@@ -439,23 +439,22 @@ def _add_requirements(target: etree._Element, project: Project) -> None:
             name="console_application",
             value="true",
         )
-    capability_values = {
-        key: requirements[key] for key in ("concurrency", "void-safety") if key in requirements
-    }
-    if capability_values:
-        capability = etree.SubElement(target, f"{{{ECF_NAMESPACE}}}capability")
-        if "concurrency" in capability_values:
-            etree.SubElement(
-                capability,
-                f"{{{ECF_NAMESPACE}}}concurrency",
-                use=capability_values["concurrency"],
-            )
-        if "void-safety" in capability_values:
-            etree.SubElement(
-                capability,
-                f"{{{ECF_NAMESPACE}}}void_safety",
-                use=capability_values["void-safety"],
-            )
+    capability = etree.SubElement(target, f"{{{ECF_NAMESPACE}}}capability")
+    concurrency = requirements.get("concurrency", "none")
+    concurrency_attributes = {"support": concurrency}
+    if "concurrency" in requirements:
+        concurrency_attributes["use"] = concurrency
+    etree.SubElement(
+        capability,
+        f"{{{ECF_NAMESPACE}}}concurrency",
+        **concurrency_attributes,
+    )
+    if "void-safety" in requirements:
+        etree.SubElement(
+            capability,
+            f"{{{ECF_NAMESPACE}}}void_safety",
+            use=requirements["void-safety"],
+        )
 
 
 def _add_conditional_externals(

@@ -70,6 +70,13 @@ $ evm build
 $ evm run
 ```
 
+New projects use non-SCOOP concurrency by default. Pass `--scoop` when the
+project is intended to use SCOOP:
+
+```console
+$ evm new concurrent_service --scoop
+```
+
 Arguments after `--` are passed directly to the application:
 
 ```console

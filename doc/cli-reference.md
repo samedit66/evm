@@ -30,12 +30,15 @@ Create a new EVM project in `PATH`.
 evm new [OPTIONS] PATH
 
 Options:
-  --lib    Create a library project.
+  --lib      Create a library project.
+  --scoop    Enable SCOOP concurrency.
   --help
 ```
 
 The command creates `Eiffel.toml`, `Eiffel.lock`, a managed ECF, `src/`, and
-`tests/`. Applications also receive an initial root class.
+`tests/`. Applications also receive an initial root class. Generated targets
+support non-SCOOP execution by default. `--scoop` records
+`[requires].concurrency = "scoop"` and enables SCOOP in the ECF.
 
 ## `evm init`
 

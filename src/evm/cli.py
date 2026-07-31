@@ -141,10 +141,11 @@ def main() -> None:
 @main.command("new")
 @click.argument("path", type=click.Path(path_type=Path))
 @click.option("--lib", "library", is_flag=True, help="Create a library project.")
+@click.option("--scoop", is_flag=True, help="Enable SCOOP concurrency.")
 @command_errors
-def new_command(path: Path, library: bool) -> None:
+def new_command(path: Path, library: bool, scoop: bool) -> None:
     """Create a new EVM project in PATH."""
-    project = create_project(path, library=library)
+    project = create_project(path, library=library, scoop=scoop)
     click.echo(f"Created {project.kind} project {project.name!r}")
     for name in ("Eiffel.toml", "Eiffel.lock", project.ecf_path.name, "src", "tests"):
         click.echo(f"  {project.directory / name}")
