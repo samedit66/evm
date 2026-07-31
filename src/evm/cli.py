@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -22,8 +23,7 @@ from evm.dependency_commands import (
 from evm.ecf import semantic_diff
 from evm.errors import EvmError
 from evm.lockfile import LOCK_NAME, load_lock
-from evm.manifest import find_manifest, load_manifest
-from evm.model import BuildRequest, Dependency
+from evm.model import BuildRequest, Dependency, Project
 from evm.project import (
     compile_project,
     create_project,
@@ -34,7 +34,10 @@ from evm.project import (
     prepare_project,
     run_project,
 )
+from evm.tasks import run_task
+from evm.testing import TestRequest, test_project
 from evm.toolchains import doctor_lines
+from evm.workspace import ProjectContext, load_project_context, workspace_tree_lines
 
 
 @dataclass(frozen=True)
@@ -52,6 +55,40 @@ class _AddCommandOptions:
     offline: bool
 
 
+@dataclass(frozen=True)
+class _TestCommandOptions:
+    release: bool
+    compiler: str | None
+    class_name: str | None
+    feature: str | None
+    offline: bool
+    regenerate_ecf: bool
+    package: str | None
+    output_json: bool
+
+
+@dataclass(frozen=True)
+class _CheckCommandOptions:
+    configuration_only: bool
+    release: bool
+    compiler: str | None
+    target: str
+    regenerate_ecf: bool
+    package: str | None
+    output_json: bool
+
+
+@dataclass(frozen=True)
+class _BuildCommandOptions:
+    release: bool
+    compiler: str | None
+    target: str
+    offline: bool
+    regenerate_ecf: bool
+    package: str | None
+    output_json: bool
+
+
 def command_errors[**P, R](function: Callable[P, R]) -> Callable[P, R]:
     """Render domain errors consistently without Python tracebacks."""
 
@@ -60,6 +97,17 @@ def command_errors[**P, R](function: Callable[P, R]) -> Callable[P, R]:
         try:
             return function(*args, **kwargs)
         except EvmError as error:
+            if kwargs.get("output_json"):
+                click.echo(
+                    json.dumps(
+                        {
+                            "status": "error",
+                            "diagnostics": [{"level": "error", "message": str(error)}],
+                        },
+                        sort_keys=True,
+                    )
+                )
+                raise click.exceptions.Exit(1) from error
             raise click.ClickException(str(error)) from error
 
     return wrapped
@@ -98,37 +146,42 @@ def init_command(library: bool) -> None:
 @click.option("--compiler", type=str, help="Compiler adapter ID: ise or gobo.")
 @click.option("--target", default="default", show_default=True)
 @click.option("--regenerate-ecf", is_flag=True, help="Explicitly overwrite managed ECF.")
+@click.option("--package", type=str, help="Limit a workspace command to one package.")
+@click.option("--json", "output_json", is_flag=True, help="Emit stable JSON for CI.")
 @command_errors
 def check_command(
-    configuration_only: bool,
-    release: bool,
-    compiler: str | None,
-    target: str,
-    regenerate_ecf: bool,
+    **raw_options: Any,
 ) -> None:
     """Validate project configuration and reachable Eiffel classes."""
-    project = load_manifest(find_manifest())
-    if configuration_only:
-        changed = prepare_project(
-            project,
-            regenerate=regenerate_ecf,
-            release=release,
-        )
-        if changed:
-            click.echo(f"Generated {project.ecf_path}")
-        click.echo("Configuration is valid.")
-        return
-    compile_project(
-        project,
-        BuildRequest(
-            compiler=compiler,
-            target=target,
-            release=release,
-            regenerate_ecf=regenerate_ecf,
-        ),
-        check_only=True,
-    )
-    click.echo("Project check completed.")
+    options = _check_command_options(raw_options)
+    projects = _command_projects(load_project_context(), options.package)
+    results: list[dict[str, str]] = []
+    for project in projects:
+        if options.configuration_only:
+            changed = prepare_project(
+                project,
+                regenerate=options.regenerate_ecf,
+                release=options.release,
+            )
+            if changed and not options.output_json:
+                click.echo(f"Generated {project.ecf_path}")
+        else:
+            compile_project(
+                project,
+                BuildRequest(
+                    compiler=options.compiler,
+                    target=options.target,
+                    release=options.release,
+                    regenerate_ecf=options.regenerate_ecf,
+                ),
+                check_only=True,
+                announce=not options.output_json,
+            )
+        results.append({"package": project.name, "status": "passed"})
+        if not options.output_json:
+            click.echo(f"{project.name}: project check completed.")
+    if options.output_json:
+        _echo_json_result("passed", results)
 
 
 @main.command("build")
@@ -137,27 +190,33 @@ def check_command(
 @click.option("--target", default="default", show_default=True)
 @click.option("--offline", is_flag=True, help="Forbid network access.")
 @click.option("--regenerate-ecf", is_flag=True, help="Explicitly overwrite managed ECF.")
+@click.option("--package", type=str, help="Limit a workspace build to one package.")
+@click.option("--json", "output_json", is_flag=True, help="Emit stable JSON for CI.")
 @command_errors
 def build_command(
-    release: bool,
-    compiler: str | None,
-    target: str,
-    offline: bool,
-    regenerate_ecf: bool,
+    **raw_options: Any,
 ) -> None:
     """Build an Eiffel application or library."""
-    project = load_manifest(find_manifest())
-    compile_project(
-        project,
-        BuildRequest(
-            compiler=compiler,
-            target=target,
-            release=release,
-            regenerate_ecf=regenerate_ecf,
-            offline=offline,
-        ),
-    )
-    click.echo("Build completed.")
+    options = _build_command_options(raw_options)
+    projects = _command_projects(load_project_context(), options.package)
+    results: list[dict[str, str]] = []
+    for project in projects:
+        compile_project(
+            project,
+            BuildRequest(
+                compiler=options.compiler,
+                target=options.target,
+                release=options.release,
+                regenerate_ecf=options.regenerate_ecf,
+                offline=options.offline,
+            ),
+            announce=not options.output_json,
+        )
+        results.append({"package": project.name, "status": "passed"})
+        if not options.output_json:
+            click.echo(f"{project.name}: build completed.")
+    if options.output_json:
+        _echo_json_result("passed", results)
 
 
 @main.command(
@@ -178,7 +237,7 @@ def run_command(
     arguments: tuple[str, ...],
 ) -> None:
     """Build and run an application; arguments after -- go to the program."""
-    project = load_manifest(find_manifest())
+    project = _require_project(load_project_context())
     exit_code = run_project(
         project,
         BuildRequest(
@@ -194,11 +253,35 @@ def run_command(
 
 
 @main.command("doctor")
+@click.option("--json", "output_json", is_flag=True, help="Emit stable JSON for CI.")
 @command_errors
-def doctor_command() -> None:
+def doctor_command(output_json: bool) -> None:
     """Diagnose installed Eiffel toolchains and their environments."""
     lines, healthy = doctor_lines()
-    click.echo("\n".join(lines))
+    if output_json:
+        click.echo(
+            json.dumps(
+                {
+                    "status": "passed" if healthy else "failed",
+                    "diagnostics": [
+                        {
+                            "level": (
+                                "error"
+                                if line.startswith("✗")
+                                else "warning"
+                                if line.lstrip().startswith("!")
+                                else "info"
+                            ),
+                            "message": line.strip(),
+                        }
+                        for line in lines[1:]
+                    ],
+                },
+                sort_keys=True,
+            )
+        )
+    else:
+        click.echo("\n".join(lines))
     if not healthy:
         raise click.exceptions.Exit(1)
 
@@ -224,7 +307,7 @@ def explain_command(
     output_mode: str | None,
 ) -> None:
     """Show the effective project configuration."""
-    project = load_manifest(find_manifest())
+    project = _require_project(load_project_context())
     if output_mode == "ecf-diff":
         click.echo(semantic_diff(project), nl=False)
         return
@@ -362,7 +445,7 @@ def add_command(
         subdir=options.subdir,
         development=options.development,
     )
-    project = load_manifest(find_manifest())
+    project = _require_project(load_project_context())
     lock = add_dependency(project, dependency, offline=options.offline)
     selected = lock.package(name)
     click.echo(f"Added {selected.name} {selected.version} [{selected.source}]")
@@ -374,7 +457,7 @@ def add_command(
 @command_errors
 def remove_command(package: str, offline: bool) -> None:
     """Remove a direct dependency and update the resolved graph."""
-    project = load_manifest(find_manifest())
+    project = _require_project(load_project_context())
     remove_dependency(project, package, offline=offline)
     click.echo(f"Removed {package}")
 
@@ -386,7 +469,7 @@ def remove_command(package: str, offline: bool) -> None:
 @command_errors
 def update_command(packages: tuple[str, ...], precise: str | None, offline: bool) -> None:
     """Resolve newer permitted dependency identities and install them."""
-    project = load_manifest(find_manifest())
+    project = _require_project(load_project_context())
     lock = update_dependencies(
         project,
         names=set(packages) if packages else None,
@@ -399,24 +482,108 @@ def update_command(packages: tuple[str, ...], precise: str | None, offline: bool
 @main.command("install")
 @click.option("--locked", is_flag=True, help="Require the existing lock file.")
 @click.option("--offline", is_flag=True, help="Forbid network access.")
+@click.option("--package", type=str, help="Limit a workspace install to one package.")
 @command_errors
-def install_command(locked: bool, offline: bool) -> None:
+def install_command(locked: bool, offline: bool, package: str | None) -> None:
     """Materialize dependencies from Eiffel.lock."""
-    project = load_manifest(find_manifest())
-    if locked and not (project.directory / LOCK_NAME).is_file():
-        raise EvmError("Eiffel.lock is required by --locked")
-    lock = install_project(project, offline=offline)
-    click.echo(f"Installed {len(lock.packages)} package(s)")
+    projects = _command_projects(load_project_context(), package)
+    for project in projects:
+        if locked and not (project.directory / LOCK_NAME).is_file():
+            raise EvmError(f"Eiffel.lock is required by --locked for package {project.name}")
+        lock = install_project(project, offline=offline)
+        click.echo(f"{project.name}: installed {len(lock.packages)} package(s)")
 
 
 @main.command("deps")
 @click.argument("package", required=False)
+@click.option("--workspace", "show_workspace", is_flag=True, help="Show package dependencies.")
 @command_errors
-def deps_command(package: str | None) -> None:
+def deps_command(package: str | None, show_workspace: bool) -> None:
     """Show the resolved dependency graph or why a package is present."""
-    project = load_manifest(find_manifest())
+    context = load_project_context()
+    if show_workspace:
+        if package is not None:
+            raise EvmError("a dependency name cannot be combined with --workspace")
+        if context.workspace is None:
+            raise EvmError("--workspace requires a workspace manifest")
+        click.echo("\n".join(workspace_tree_lines(context.workspace)))
+        return
+    project = _require_project(context)
     lock = load_lock(project.directory / LOCK_NAME)
     click.echo("\n".join(dependency_tree_lines(project, lock, focus=package)))
+
+
+@main.command("test")
+@click.option("--release", is_flag=True, help="Build tests in release mode.")
+@click.option("--compiler", type=str, help="Compiler adapter ID: ise or gobo.")
+@click.option("--class", "class_name", type=str, help="Run one supported test class.")
+@click.option("--feature", type=str, help="Run one supported test feature.")
+@click.option("--offline", is_flag=True, help="Forbid network access.")
+@click.option("--regenerate-ecf", is_flag=True, help="Explicitly overwrite managed ECF.")
+@click.option("--package", type=str, help="Limit a workspace test to one package.")
+@click.option("--json", "output_json", is_flag=True, help="Emit stable JSON for CI.")
+@command_errors
+def test_command(
+    **raw_options: Any,
+) -> None:
+    """Build and run a configured Eiffel test system."""
+    options = _test_command_options(raw_options)
+    projects = _command_projects(load_project_context(), options.package)
+    results: list[dict[str, object]] = []
+    failed_code = 0
+    for project in projects:
+        result = test_project(
+            project,
+            TestRequest(
+                compiler=options.compiler,
+                release=options.release,
+                class_name=options.class_name,
+                feature=options.feature,
+                offline=options.offline,
+                regenerate_ecf=options.regenerate_ecf,
+                capture_output=options.output_json,
+            ),
+        )
+        data = {"package": project.name, **result.as_dict()}
+        results.append(data)
+        failed_code = failed_code or result.exit_code
+        if not options.output_json:
+            click.echo(f"Package: {project.name}")
+            click.echo(f"Status: {result.status}")
+            click.echo(f"Exit code: {result.exit_code}")
+            click.echo(f"Time: {result.elapsed_seconds:.2f}s")
+            click.echo(f"Compiler: {result.compiler}")
+            click.echo(f"Runner: {result.runner}")
+    if options.output_json:
+        _echo_json_result("failed" if failed_code else "passed", results)
+    if failed_code:
+        raise click.exceptions.Exit(failed_code)
+
+
+@main.command("task")
+@click.argument("name")
+@click.option(
+    "--allow-build-scripts",
+    is_flag=True,
+    help="Allow explicitly declared non-portable shell steps.",
+)
+@command_errors
+def task_command(name: str, allow_build_scripts: bool) -> None:
+    """Run a manifest-defined project workflow."""
+    context = load_project_context()
+    project = _require_project(context)
+    previous_directory = Path.cwd()
+    try:
+        os.chdir(project.directory)
+        run_task(
+            project,
+            name,
+            _run_nested_command,
+            allow_build_scripts=allow_build_scripts,
+        )
+    finally:
+        os.chdir(previous_directory)
+    click.echo(f"Task {name!r} completed.")
 
 
 @main.command("clean")
@@ -427,7 +594,7 @@ def clean_command(dependencies: bool, unused: bool) -> None:
     """Remove selected generated project state."""
     if dependencies and unused:
         raise EvmError("--dependencies and --unused are mutually exclusive")
-    project = load_manifest(find_manifest())
+    project = _require_project(load_project_context())
     if unused:
         lock = load_lock(project.directory / LOCK_NAME)
         removed_deps, removed_sources = clean_unused(project, lock)
@@ -436,7 +603,7 @@ def clean_command(dependencies: bool, unused: bool) -> None:
             f"and {removed_sources} unused source(s)"
         )
         return
-    target = project.directory / (".evm/deps" if dependencies else "build")
+    target = project.state_directory / "deps" if dependencies else project.directory / "build"
     if target.is_dir():
         shutil.rmtree(target)
     click.echo(f"Removed {target}")
@@ -465,3 +632,72 @@ def _add_command_options(values: Mapping[str, Any]) -> _AddCommandOptions:
         subdir=values["subdir"],
         offline=values["offline"],
     )
+
+
+def _test_command_options(values: Mapping[str, Any]) -> _TestCommandOptions:
+    return _TestCommandOptions(
+        release=values["release"],
+        compiler=values["compiler"],
+        class_name=values["class_name"],
+        feature=values["feature"],
+        offline=values["offline"],
+        regenerate_ecf=values["regenerate_ecf"],
+        package=values["package"],
+        output_json=values["output_json"],
+    )
+
+
+def _check_command_options(values: Mapping[str, Any]) -> _CheckCommandOptions:
+    return _CheckCommandOptions(
+        configuration_only=values["configuration_only"],
+        release=values["release"],
+        compiler=values["compiler"],
+        target=values["target"],
+        regenerate_ecf=values["regenerate_ecf"],
+        package=values["package"],
+        output_json=values["output_json"],
+    )
+
+
+def _build_command_options(values: Mapping[str, Any]) -> _BuildCommandOptions:
+    return _BuildCommandOptions(
+        release=values["release"],
+        compiler=values["compiler"],
+        target=values["target"],
+        offline=values["offline"],
+        regenerate_ecf=values["regenerate_ecf"],
+        package=values["package"],
+        output_json=values["output_json"],
+    )
+
+
+def _require_project(context: ProjectContext) -> Project:
+    if context.project is not None:
+        return context.project
+    raise EvmError("this command requires a package; run it inside a workspace member")
+
+
+def _command_projects(
+    context: ProjectContext,
+    package: str | None,
+) -> tuple[Project, ...]:
+    if context.workspace is not None:
+        return context.workspace.ordered_packages(package)
+    if package is not None:
+        raise EvmError("--package requires a workspace")
+    return (_require_project(context),)
+
+
+def _echo_json_result(status: str, packages: list[dict[str, object]]) -> None:
+    click.echo(json.dumps({"status": status, "packages": packages}, sort_keys=True))
+
+
+def _run_nested_command(arguments: tuple[str, ...]) -> int:
+    try:
+        main.main(args=list(arguments), standalone_mode=False)
+    except click.exceptions.Exit as error:
+        return error.exit_code
+    except click.ClickException as error:
+        error.show()
+        return error.exit_code
+    return 0

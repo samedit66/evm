@@ -99,7 +99,7 @@ def install_dependencies(
 ) -> LockFile:
     selected_lock = lock or load_lock(project.directory / LOCK_NAME)
     ensure_lock_matches(project, selected_lock)
-    evm_directory = project.directory / ".evm"
+    evm_directory = project.state_directory
     lock_directory = evm_directory / "locks"
     lock_directory.mkdir(parents=True, exist_ok=True)
     with FileLock(lock_directory / "install.lock"):
@@ -125,14 +125,17 @@ def dependency_library_locations(
             package_root = (project.directory / package.path).resolve()
             location = os.path.relpath(package_root / package.ecf, project.directory)
         else:
-            location = f".evm/deps/{package.materialized_name}/{package.ecf}"
+            dependency_ecf = (
+                project.state_directory / "deps" / package.materialized_name / package.ecf
+            )
+            location = os.path.relpath(dependency_ecf, project.directory)
         locations.append((package.name, Path(location).as_posix()))
     return tuple(locations)
 
 
 def clean_unused(project: Project, lock: LockFile) -> tuple[int, int]:
-    deps_directory = project.directory / ".evm" / "deps"
-    sources_directory = project.directory / ".evm" / "sources" / "git"
+    deps_directory = project.state_directory / "deps"
+    sources_directory = project.state_directory / "sources" / "git"
     used_deps = {package.materialized_name for package in lock.packages if package.path is None}
     used_sources = {
         _source_key(package.source.removeprefix("git+"))
@@ -141,7 +144,7 @@ def clean_unused(project: Project, lock: LockFile) -> tuple[int, int]:
     }
     removed_deps = _remove_unlisted_directories(deps_directory, used_deps)
     removed_sources = _remove_unlisted_directories(sources_directory, used_sources)
-    archives_directory = project.directory / ".evm" / "sources" / "archives"
+    archives_directory = project.state_directory / "sources" / "archives"
     used_archives = {
         f"{package.checksum.removeprefix('sha256:')}.tar.bz2"
         for package in lock.packages
@@ -450,7 +453,7 @@ def _install_package(
         if not root.is_dir():
             raise EvmError(f"path dependency {package.name} does not exist: {package.path}")
         return
-    destination = project.directory / ".evm" / "deps" / package.materialized_name
+    destination = project.state_directory / "deps" / package.materialized_name
     if destination.is_dir() and _installed_package_valid(destination, package):
         return
     if offline and not _source_available(project, package):
@@ -459,7 +462,7 @@ def _install_package(
             f"dependency {package.name} ({package.source} {identity}) is missing locally; "
             "run `evm install` with network access"
         )
-    temporary_root = project.directory / ".evm" / "tmp"
+    temporary_root = project.state_directory / "tmp"
     temporary_root.mkdir(parents=True, exist_ok=True)
     temporary = Path(tempfile.mkdtemp(prefix=f"{package.name}-", dir=temporary_root))
     try:
@@ -557,7 +560,7 @@ def _git_repository(
     offline: bool,
     request: _GitFetchRequest,
 ) -> Path:
-    directory = project.directory / ".evm" / "sources" / "git" / _source_key(url)
+    directory = project.state_directory / "sources" / "git" / _source_key(url)
     repository = directory / "repository.git"
     if not repository.is_dir():
         if offline:
@@ -803,7 +806,7 @@ def _source_available(project: Project, package: LockedPackage) -> bool:
     if package.source.startswith("git+"):
         url = package.source.removeprefix("git+")
         repository = (
-            project.directory / ".evm" / "sources" / "git" / _source_key(url) / "repository.git"
+            project.state_directory / "sources" / "git" / _source_key(url) / "repository.git"
         )
         if not repository.is_dir() or package.revision is None:
             return False
@@ -837,7 +840,7 @@ def _write_state(project: Project, lock: LockFile) -> None:
         ],
     )
     atomic_write(
-        project.directory / ".evm" / "state.toml",
+        project.state_directory / "state.toml",
         tomlkit.dumps(document).encode(),
     )
 
@@ -935,8 +938,8 @@ def _iron_archive_metadata(output: str, name: str) -> tuple[str, str, str]:
 
 
 def _download_archive(project: Project, url: str) -> tuple[Path, str]:
-    archives = project.directory / ".evm" / "sources" / "archives"
-    temporary_root = project.directory / ".evm" / "tmp"
+    archives = project.state_directory / "sources" / "archives"
+    temporary_root = project.state_directory / "tmp"
     archives.mkdir(parents=True, exist_ok=True)
     temporary_root.mkdir(parents=True, exist_ok=True)
     temporary = temporary_root / f"archive-{_source_key(url)}.download"
@@ -966,7 +969,7 @@ def _cached_archive(project: Project, package: LockedPackage) -> Path:
     if package.checksum is None or not package.checksum.startswith("sha256:"):
         raise EvmError(f"IRON package {package.name} has no SHA-256 archive checksum")
     digest = package.checksum.removeprefix("sha256:")
-    archive = project.directory / ".evm" / "sources" / "archives" / f"{digest}.tar.bz2"
+    archive = project.state_directory / "sources" / "archives" / f"{digest}.tar.bz2"
     if not archive.is_file() or _file_sha256(archive) != digest:
         raise EvmError(
             f"IRON archive for {package.name} is missing or corrupted; "
@@ -996,7 +999,7 @@ def _ensure_iron_archive(
 
 
 def _extract_archive_for_resolution(project: Project, name: str, archive: Path) -> Path:
-    temporary_root = project.directory / ".evm" / "tmp"
+    temporary_root = project.state_directory / "tmp"
     temporary_root.mkdir(parents=True, exist_ok=True)
     root = Path(tempfile.mkdtemp(prefix=f"resolve-{name}-", dir=temporary_root))
     try:
@@ -1058,7 +1061,7 @@ def _rewrite_iron_ecf_locations(
     package: LockedPackage,
     root: Path,
 ) -> None:
-    package_destination = project.directory / ".evm" / "deps" / package.materialized_name
+    package_destination = project.state_directory / "deps" / package.materialized_name
     for ecf_path in root.rglob("*.ecf"):
         try:
             tree = etree.parse(
@@ -1081,7 +1084,7 @@ def _rewrite_iron_ecf_locations(
             except KeyError:
                 continue
             dependency_ecf = (
-                project.directory / ".evm" / "deps" / dependency.materialized_name / parts[2]
+                project.state_directory / "deps" / dependency.materialized_name / parts[2]
             )
             element.set(
                 "location",

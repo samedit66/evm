@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import re
+import shlex
 import uuid as uuid_module
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -14,7 +15,17 @@ import tomlkit
 from tomlkit.exceptions import TOMLKitError
 
 from evm.errors import EvmError
-from evm.model import CompilerRequirement, Condition, Dependency, Project, Root, Target
+from evm.model import (
+    CompilerRequirement,
+    Condition,
+    Dependency,
+    Project,
+    Root,
+    Target,
+    Task,
+    TaskStep,
+    TestConfiguration,
+)
 from evm.versioning import NumericVersion, validate_constraint
 
 MANIFEST_NAME = "Eiffel.toml"
@@ -31,6 +42,9 @@ _TOP_LEVEL = {
     "dev-dependencies",
     "patch",
     "ecf",
+    "test",
+    "scripts",
+    "workspace",
 }
 _REQUIRES = {
     "standard": {"ecma", "ise"},
@@ -97,6 +111,19 @@ def parse_manifest(content: str, path: Path) -> Project:
     sources = _string_list(sources_table.get("clusters"), "sources.clusters", required=True)
     targets = [Target("default", root, sources)]
     targets.extend(_parse_targets(document.get("targets"), metadata.kind))
+    test = _parse_test(document.get("test"), targets)
+    if test is None and (path.parent / "tests").is_dir():
+        has_test_sources = any((path.parent / "tests").rglob("*.e"))
+        if has_test_sources and not any(target.name == "test" for target in targets):
+            targets.append(
+                Target(
+                    "test",
+                    Root("TEST_APPLICATION", "make"),
+                    ("tests",),
+                    "default",
+                )
+            )
+            test = TestConfiguration("test")
     _validate_target_graph(targets)
 
     compilers = _parse_compilers(document.get("compatibility"))
@@ -110,6 +137,9 @@ def parse_manifest(content: str, path: Path) -> Project:
         raise EvmError("a dependency cannot appear in both dependencies and dev-dependencies")
     dependencies = _apply_patches(dependencies, document.get("patch"))
     ecf_includes = _parse_ecf_includes(document.get("ecf"), path)
+    tasks = _parse_tasks(document.get("scripts"))
+    _validate_task_references(tasks)
+    _parse_workspace_members(document.get("workspace"), path)
     return Project(
         manifest_path=path.resolve(),
         name=metadata.name,
@@ -125,7 +155,131 @@ def parse_manifest(content: str, path: Path) -> Project:
         compiler_arguments=compiler_arguments,
         dependencies=dependencies,
         ecf_includes=ecf_includes,
+        test=test,
+        tasks=tasks,
     )
+
+
+def _parse_test(value: Any, targets: list[Target]) -> TestConfiguration | None:
+    target_names = {target.name for target in targets}
+    if value is None:
+        return TestConfiguration("test") if "test" in target_names else None
+    if not isinstance(value, Mapping):
+        raise EvmError("test must be a table")
+    _reject_unknown(value, {"target"}, "test")
+    target = _required_string(value, "target", "test.target")
+    if target not in target_names:
+        raise EvmError(f"test.target refers to unknown target {target!r}")
+    return TestConfiguration(target)
+
+
+def _parse_tasks(value: Any) -> tuple[Task, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, Mapping):
+        raise EvmError("scripts must be a table")
+    tasks: list[Task] = []
+    for name, raw in value.items():
+        if _NAME_RE.fullmatch(name) is None:
+            raise EvmError(f"scripts.{name} is not a valid task name")
+        if isinstance(raw, str):
+            arguments = _short_task_arguments(raw, f"scripts.{name}")
+            tasks.append(Task(name, (TaskStep(command=arguments[0], arguments=arguments[1:]),)))
+            continue
+        if not isinstance(raw, Mapping):
+            raise EvmError(f"scripts.{name} must be a command string or table")
+        _reject_unknown(raw, {"steps"}, f"scripts.{name}")
+        steps = raw.get("steps")
+        if not isinstance(steps, list) or not steps:
+            raise EvmError(f"scripts.{name}.steps must be a non-empty array")
+        tasks.append(
+            Task(
+                name,
+                tuple(
+                    _parse_task_step(step, f"scripts.{name}.steps[{index}]")
+                    for index, step in enumerate(steps)
+                ),
+            )
+        )
+    return tuple(tasks)
+
+
+def _short_task_arguments(value: str, path: str) -> tuple[str, ...]:
+    try:
+        arguments = tuple(shlex.split(value, posix=True))
+    except ValueError as error:
+        raise EvmError(f"{path} is not a valid command: {error}") from error
+    if not arguments:
+        raise EvmError(f"{path} must contain one EVM command")
+    if any(token in value for token in ("&&", "||", "|", ">", "<", ";", "$(", "`")) or re.search(
+        r"\$[A-Za-z_{]", value
+    ):
+        raise EvmError(f"{path} must contain one EVM command without shell operators")
+    return arguments
+
+
+def _parse_task_step(value: Any, path: str) -> TaskStep:
+    if not isinstance(value, Mapping):
+        raise EvmError(f"{path} must be a table")
+    command = value.get("command")
+    shell = value.get("shell")
+    if (command is None) == (shell is None):
+        raise EvmError(f"{path} requires exactly one of command or shell")
+    if shell is not None:
+        _reject_unknown(value, {"shell"}, path)
+        return TaskStep(shell=_non_empty_string(shell, f"{path}.shell"))
+    allowed_options = {
+        "command",
+        "release",
+        "compiler",
+        "target",
+        "offline",
+        "configuration-only",
+        "package",
+    }
+    _reject_unknown(value, allowed_options, path)
+    arguments: list[str] = []
+    for key, option in value.items():
+        if key == "command":
+            continue
+        option_name = f"--{key}"
+        if isinstance(option, bool):
+            if option:
+                arguments.append(option_name)
+        elif isinstance(option, str) and option:
+            arguments.extend((option_name, option))
+        else:
+            raise EvmError(f"{path}.{key} must be a string or boolean")
+    return TaskStep(
+        command=_non_empty_string(command, f"{path}.command"),
+        arguments=tuple(arguments),
+    )
+
+
+def _validate_task_references(tasks: tuple[Task, ...]) -> None:
+    names = {task.name for task in tasks}
+    for task in tasks:
+        for step in task.steps:
+            if step.command == "task" and (not step.arguments or step.arguments[0] not in names):
+                raise EvmError(f"task {task.name!r} refers to an unknown task")
+
+
+def _parse_workspace_members(value: Any, path: Path) -> tuple[Path, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, Mapping):
+        raise EvmError("workspace must be a table")
+    _reject_unknown(value, {"members"}, "workspace")
+    members = _string_list(value.get("members"), "workspace.members", required=True)
+    resolved: list[Path] = []
+    for index, member in enumerate(members):
+        member_path = _safe_project_path(path.parent, member, f"workspace.members[{index}]")
+        if not (member_path / MANIFEST_NAME).is_file():
+            raise EvmError(f"workspace member has no {MANIFEST_NAME}: {member}")
+        resolved.append(member_path)
+    if len(resolved) != len(set(resolved)):
+        raise EvmError("workspace.members contains duplicate paths")
+    return tuple(resolved)
 
 
 def _parse_project_metadata(

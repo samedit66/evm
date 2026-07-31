@@ -29,6 +29,7 @@ from evm.toolchains import (
     run_compiler,
     select_toolchain,
 )
+from evm.workspace import is_workspace_member_dependency
 
 
 @dataclass(frozen=True)
@@ -177,7 +178,11 @@ def _source_diagnostics(
 def _release_dependency_diagnostics(project: Project) -> list[str]:
     diagnostics: list[str] = []
     for dependency in project.dependencies:
-        if dependency.source == "path":
+        if (
+            dependency.source == "path"
+            and dependency.path is not None
+            and not is_workspace_member_dependency(project, dependency.path)
+        ):
             diagnostics.append(
                 f"dependency {dependency.name}: external path dependency is not allowed "
                 "in release mode"
@@ -210,6 +215,8 @@ def compile_project(
     project: Project,
     request: BuildRequest,
     check_only: bool = False,
+    *,
+    announce: bool = True,
 ) -> Toolchain:
     _require_target(project, request.target)
     prepare_project(
@@ -221,8 +228,9 @@ def compile_project(
     toolchain = select_toolchain(project, request.compiler)
     build_directory = prepare_build_directory(toolchain, project, request, check_only)
     command = compiler_command(toolchain, project, request, check_only)
-    print_toolchain(toolchain, request=request)
-    run_compiler(command, build_directory)
+    if announce:
+        print_toolchain(toolchain, request=request)
+    run_compiler(command, build_directory, capture_output=not announce)
     return toolchain
 
 

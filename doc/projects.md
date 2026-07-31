@@ -1,0 +1,156 @@
+# Projects and manifests
+
+## Creating a project
+
+Create an application:
+
+```console
+$ evm new hello
+```
+
+Create a library:
+
+```console
+$ evm new shared --lib
+```
+
+Initialize an existing directory without overwriting its files:
+
+```console
+$ evm init
+$ evm init --lib
+```
+
+A generated application contains:
+
+```text
+hello/
+├── Eiffel.toml
+├── Eiffel.lock
+├── hello.ecf
+├── src/
+├── tests/
+├── .evm/
+└── build/
+```
+
+## State ownership
+
+| Path | Responsibility | Commit? |
+|---|---|:---:|
+| `Eiffel.toml` | Project intent, targets, direct dependencies, workflows | Yes |
+| `Eiffel.lock` | Exact resolved dependency graph | Yes |
+| `<project>.ecf` | Native Eiffel configuration | Yes |
+| `.evm/` | Installed dependencies, source cache, locks, temporary state | No |
+| `build/` | Compiler products | No |
+
+Recommended `.gitignore`:
+
+```gitignore
+.evm/
+build/
+```
+
+Deleting `.evm/` is safe. `evm install --locked` reconstructs it from the
+manifest and lock file.
+
+## Minimal manifest
+
+```toml
+[project]
+name = "hello"
+version = "0.1.0"
+type = "application"
+uuid = "2e17c4af-2d3f-4ca5-95d0-e69be3cd02f1"
+ecf = "hello.ecf"
+ecf-managed = true
+
+[root]
+class = "APPLICATION"
+feature = "make"
+
+[sources]
+clusters = ["src"]
+```
+
+The manifest describes intent rather than machine-specific state. EVM infers
+the default target, development and release modes, compiler selection, local
+package layout, and a conventional test target when explicit configuration is
+unnecessary.
+
+## Check and explain
+
+Validate configuration without invoking an Eiffel compiler:
+
+```console
+$ evm check --configuration-only
+```
+
+Run compiler-backed validation:
+
+```console
+$ evm check
+$ evm check --release
+$ evm check --target server
+```
+
+Inspect the effective configuration:
+
+```console
+$ evm explain
+$ evm explain --target server
+$ evm explain --release --compiler gobo
+$ evm explain --json
+```
+
+List effective targets:
+
+```console
+$ evm explain --targets
+```
+
+Targets are declared in `Eiffel.toml`. Development and release are build modes,
+not separate targets.
+
+## Build and run
+
+```console
+$ evm build
+$ evm build --release
+$ evm build --target server
+$ evm run
+$ evm run --target server -- --port 8080
+```
+
+Arguments following `--` are passed directly to the application.
+
+Build output is isolated by compiler, target, and mode:
+
+```text
+build/<compiler>/<target>/<mode>/
+```
+
+Before compiling, EVM restores locked dependencies and verifies that the ECF
+matches the resolved project.
+
+## Clean generated state
+
+Remove build output:
+
+```console
+$ evm clean
+```
+
+Remove materialized dependencies:
+
+```console
+$ evm clean --dependencies
+```
+
+Remove only state no longer reachable from the current lock file:
+
+```console
+$ evm clean --unused
+```
+
+See [ECF interoperability](ecf.md) for managed and legacy configuration.

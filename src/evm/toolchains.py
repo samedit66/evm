@@ -220,7 +220,12 @@ def compiler_command(
     return command
 
 
-def run_compiler(command: list[str], working_directory: Path) -> None:
+def run_compiler(
+    command: list[str],
+    working_directory: Path,
+    *,
+    capture_output: bool = False,
+) -> None:
     environment = os.environ.copy()
     adapter = "gobo" if Path(command[0]).name == "gec" else "ise"
     environment["evm_compiler"] = adapter
@@ -232,9 +237,22 @@ def run_compiler(command: list[str], working_directory: Path) -> None:
         cwd=working_directory,
         env=environment,
         check=False,
+        capture_output=capture_output,
+        text=capture_output,
     )
     if completed.returncode != 0:
-        raise EvmError(f"compiler exited with status {completed.returncode}: {' '.join(command)}")
+        details = ""
+        if capture_output:
+            output = "\n".join(
+                item.strip()
+                for item in (completed.stdout, completed.stderr)
+                if isinstance(item, str) and item.strip()
+            )
+            if output:
+                details = f"\n{output}"
+        raise EvmError(
+            f"compiler exited with status {completed.returncode}: {' '.join(command)}{details}"
+        )
 
 
 def artifact_candidates(

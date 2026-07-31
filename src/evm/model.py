@@ -60,6 +60,24 @@ class BuildRequest:
 
 
 @dataclass(frozen=True)
+class TestConfiguration:
+    target: str
+
+
+@dataclass(frozen=True)
+class TaskStep:
+    command: str | None = None
+    shell: str | None = None
+    arguments: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class Task:
+    name: str
+    steps: tuple[TaskStep, ...]
+
+
+@dataclass(frozen=True)
 class Project:
     manifest_path: Path
     name: str
@@ -75,10 +93,17 @@ class Project:
     compiler_arguments: dict[str, tuple[str, ...]] = field(default_factory=dict)
     dependencies: tuple[Dependency, ...] = ()
     ecf_includes: tuple[Path, ...] = ()
+    test: TestConfiguration | None = None
+    tasks: tuple[Task, ...] = ()
+    workspace_root: Path | None = None
 
     @property
     def directory(self) -> Path:
         return self.manifest_path.parent
+
+    @property
+    def state_directory(self) -> Path:
+        return (self.workspace_root or self.directory) / ".evm"
 
     def target(self, name: str) -> Target:
         for target in self.targets:
