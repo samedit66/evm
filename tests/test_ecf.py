@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -7,7 +8,9 @@ from lxml import etree
 
 from evm.ecf import ECF_NAMESPACE, generate_ecf, semantic_diff, semantic_summary, validate_ecf
 from evm.errors import EvmError
+from evm.lockfile import LockedPackage, LockFile, manifest_fingerprint
 from evm.manifest import load_manifest
+from evm.model import Dependency
 from evm.project import create_project
 
 
@@ -81,3 +84,57 @@ def test_ecf_fragment_rejects_high_level_conflict(tmp_path: Path) -> None:
 
     with pytest.raises(EvmError, match="conflicts with target"):
         generate_ecf(load_manifest(project.manifest_path))
+
+
+def test_ecf_fragment_rejects_duplicate_runtime_group_name(tmp_path: Path) -> None:
+    project = create_project(tmp_path / "hello")
+    config = project.directory / "config"
+    config.mkdir()
+    (config / "duplicate.xml").write_text(
+        f'<ecf-overlay xmlns="{ECF_NAMESPACE}">'
+        '<target name="default">'
+        '<library name="base" location="custom/base.ecf"/>'
+        "</target>"
+        "</ecf-overlay>"
+    )
+    project.manifest_path.write_text(
+        project.manifest_path.read_text() + '\n[ecf]\ninclude = ["config/duplicate.xml"]\n'
+    )
+
+    with pytest.raises(EvmError, match="duplicate group name 'base' for library and library"):
+        generate_ecf(load_manifest(project.manifest_path))
+
+
+def test_ecf_rejects_dependency_name_conflicting_with_cluster(tmp_path: Path) -> None:
+    project = create_project(tmp_path / "hello")
+    dependency = Dependency(name="default_src_0", source="path", path=".")
+    project_with_dependency = replace(project, dependencies=(dependency,))
+    package = LockedPackage(
+        name=dependency.name,
+        version="0.0.0",
+        source="path+.",
+        path=".",
+        ecf="hello.ecf",
+    )
+    lock = LockFile(manifest_fingerprint(project_with_dependency), (package,))
+
+    with pytest.raises(
+        EvmError,
+        match="duplicate group name 'default_src_0' for library and cluster",
+    ):
+        generate_ecf(project_with_dependency, lock)
+
+
+def test_ecf_allows_same_group_names_in_different_targets(tmp_path: Path) -> None:
+    project = create_project(tmp_path / "hello")
+    project.manifest_path.write_text(
+        project.manifest_path.read_text()
+        + '\n[targets.alternate]\nroot = "APPLICATION.make"\nsources = ["src"]\n'
+    )
+
+    generated = generate_ecf(load_manifest(project.manifest_path))
+
+    root = etree.fromstring(generated)
+    targets = root.xpath("./*[local-name()='target']")
+    assert len(targets) == 2
+    assert all(target.xpath("./*[local-name()='library'][@name='base']") for target in targets)

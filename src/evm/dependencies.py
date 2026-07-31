@@ -17,6 +17,7 @@ import tomlkit
 from filelock import FileLock
 from lxml import etree
 
+from evm.dependency_validation import ensure_dependency_is_not_implicit_runtime
 from evm.errors import EvmError
 from evm.filesystem import atomic_write
 from evm.lockfile import (
@@ -184,6 +185,7 @@ def _resolve_dependency(
     dependency: Dependency,
     state: _ResolutionState,
 ) -> None:
+    ensure_dependency_is_not_implicit_runtime(dependency)
     if dependency.name in state.resolving:
         cycle = " -> ".join((*state.resolving, dependency.name))
         raise EvmError(f"dependency cycle detected: {cycle}")

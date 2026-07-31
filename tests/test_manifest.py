@@ -23,6 +23,73 @@ def test_manifest_rejects_unknown_requires_key(tmp_path: Path) -> None:
         load_manifest(path)
 
 
+@pytest.mark.parametrize(
+    ("section", "declaration"),
+    [
+        ("dependencies", 'base = { source = "ise" }'),
+        ("dependencies", 'eiffel_base = { source = "ise", library = "base" }'),
+        ("dependencies", 'free_elks = { source = "gobo", library = "free_elks" }'),
+        ("dependencies", 'runtime = { source = "gobo", library = "free_elks" }'),
+        ("dev-dependencies", 'runtime = { source = "ise", library = "base" }'),
+    ],
+)
+def test_manifest_rejects_implicit_runtime_dependencies(
+    tmp_path: Path,
+    section: str,
+    declaration: str,
+) -> None:
+    project = create_project(tmp_path / "hello")
+    project.manifest_path.write_text(
+        project.manifest_path.read_text() + f"\n[{section}]\n{declaration}\n"
+    )
+
+    with pytest.raises(EvmError, match=r"runtime library .* EVM provides automatically"):
+        load_manifest(project.manifest_path)
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        'base = { git = "https://example.invalid/base.git", tag = "v1" }',
+        'base = { source = "ise", library = "time" }',
+        'free_elks = { source = "gobo", library = "xml" }',
+    ],
+)
+def test_manifest_rejects_reserved_runtime_group_names(
+    tmp_path: Path,
+    declaration: str,
+) -> None:
+    project = create_project(tmp_path / "hello")
+    project.manifest_path.write_text(
+        project.manifest_path.read_text() + f"\n[dependencies]\n{declaration}\n"
+    )
+
+    with pytest.raises(EvmError, match=r"dependency name .* is reserved"):
+        load_manifest(project.manifest_path)
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        'foundation = { git = "https://example.invalid/base.git", tag = "v1" }',
+        'time_adapter = { source = "ise", library = "time" }',
+        'xml_adapter = { source = "gobo", library = "xml" }',
+    ],
+)
+def test_manifest_allows_non_runtime_dependency_aliases(
+    tmp_path: Path,
+    declaration: str,
+) -> None:
+    project = create_project(tmp_path / "hello")
+    project.manifest_path.write_text(
+        project.manifest_path.read_text() + f"\n[dependencies]\n{declaration}\n"
+    )
+
+    loaded = load_manifest(project.manifest_path)
+
+    assert len(loaded.dependencies) == 1
+
+
 @pytest.mark.parametrize("constraint", ["^25.12", "~25.12", "25.12", ">=25.x"])
 def test_manifest_rejects_invalid_version_constraints(tmp_path: Path, constraint: str) -> None:
     project = create_project(tmp_path / constraint.replace(".", "_").replace(">", "x"))

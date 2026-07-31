@@ -14,6 +14,7 @@ from typing import Any
 import tomlkit
 from tomlkit.exceptions import TOMLKitError
 
+from evm.dependency_validation import ensure_dependency_is_not_implicit_runtime
 from evm.errors import EvmError
 from evm.model import (
     CompilerRequirement,
@@ -606,7 +607,7 @@ def _parse_dependency(
         raise EvmError(f"{path}.library is required")
     if source == "iron" and version is None:
         raise EvmError(f"{path}.version is required")
-    return Dependency(
+    dependency = Dependency(
         name=name,
         source=source,
         version=version,
@@ -619,6 +620,8 @@ def _parse_dependency(
         subdir=subdir,
         development=development,
     )
+    ensure_dependency_is_not_implicit_runtime(dependency)
+    return dependency
 
 
 def _dependency_source(raw: Mapping[str, Any], path: str) -> str:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -14,7 +15,44 @@ from evm.ecf import generate_ecf
 from evm.errors import EvmError
 from evm.lockfile import load_lock
 from evm.manifest import load_manifest
+from evm.model import Dependency
 from evm.project import create_project
+
+
+def test_resolver_rejects_programmatic_implicit_runtime_dependency(tmp_path: Path) -> None:
+    project = create_project(tmp_path / "hello")
+    dependency = Dependency(name="eiffel_base", source="ise", library="base")
+    project_with_runtime_dependency = replace(project, dependencies=(dependency,))
+
+    with pytest.raises(EvmError, match="runtime library 'base'"):
+        resolve_dependencies(project_with_runtime_dependency)
+
+    assert not (project.directory / ".evm" / "deps").exists()
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["add", "base", "--source", "ise"],
+        ["add", "eiffel_base", "--source", "ise", "--library", "base"],
+    ],
+)
+def test_add_runtime_dependency_preserves_project_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    arguments: list[str],
+) -> None:
+    project = create_project(tmp_path / "hello")
+    monkeypatch.chdir(project.directory)
+    files = (project.manifest_path, project.directory / "Eiffel.lock", project.ecf_path)
+    original_contents = {path: path.read_bytes() for path in files}
+
+    result = CliRunner().invoke(main, arguments)
+
+    assert result.exit_code != 0
+    assert "runtime library 'base'" in result.output
+    assert {path: path.read_bytes() for path in files} == original_contents
+    assert not (project.directory / ".evm" / "deps").exists()
 
 
 def test_path_dependency_is_live_and_rendered_as_relative_ecf(
