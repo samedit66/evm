@@ -100,6 +100,7 @@ def install_dependencies(
 ) -> LockFile:
     selected_lock = lock or load_lock(project.directory / LOCK_NAME)
     ensure_lock_matches(project, selected_lock)
+    _ensure_lock_graph_complete(selected_lock)
     evm_directory = project.state_directory
     lock_directory = evm_directory / "locks"
     lock_directory.mkdir(parents=True, exist_ok=True)
@@ -861,6 +862,17 @@ def _declared_source(dependency: Dependency) -> str:
 
 def _package_identity(package: LockedPackage) -> tuple[str, str, str | None]:
     return package.source, package.version, package.revision
+
+
+def _ensure_lock_graph_complete(lock: LockFile) -> None:
+    package_names = {package.name for package in lock.packages}
+    for package in lock.packages:
+        for dependency in package.dependencies:
+            if dependency not in package_names:
+                raise EvmError(
+                    f"Eiffel.lock package {package.name} is missing transitive dependency "
+                    f"{dependency}"
+                )
 
 
 def _copy_locked_closure(
