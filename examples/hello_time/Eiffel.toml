@@ -1,0 +1,17 @@
+[project]
+name = "hello_time"
+version = "0.1.0"
+type = "application"
+uuid = "313bb4b7-ced0-415e-982e-924220d86c19"
+ecf = "hello_time.ecf"
+ecf-managed = true
+
+[root]
+class = "APPLICATION"
+feature = "make"
+
+[sources]
+clusters = ["src"]
+
+[dependencies]
+gobo_time = {source = "gobo", library = "time"}

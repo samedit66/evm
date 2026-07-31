@@ -1,0 +1,12 @@
+format-version = 1
+manifest-fingerprint = "2d02c86777eb01331220ab78baf8cd3c4088870862d25fb8576ab98ea9e765fe"
+
+[[package]]
+name = "gobo_time"
+version = "26.06.30"
+source = "gobo-distribution"
+checksum = "sha256:f4f47e44c345513340c13e5a81f53800c69f9fa17500c1198f6346eec65ead01"
+ecf = "library/time/library.ecf"
+path-kind = "gobo-library"
+distribution = "gobo"
+library = "time"

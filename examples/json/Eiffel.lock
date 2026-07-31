@@ -1,0 +1,11 @@
+format-version = 1
+manifest-fingerprint = "19f4ba3afbf30a4c88935a2ea8d1930a58f55562e61b5fa4be1f102f06cc2269"
+
+[[package]]
+name = "ejson"
+version = "0.0.0"
+source = "git+https://github.com/eiffelhub/json.git"
+requested = "tag:v0.11"
+revision = "c8a0f396be761a552e6b1602e8cefd7140bc47a2"
+tree = "aa7dd765dd929a682f6fd24ab9c698f7cf619bbc"
+ecf = "library/json.ecf"

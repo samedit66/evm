@@ -143,6 +143,14 @@ hello/
 Commit `Eiffel.toml`, `Eiffel.lock`, and the managed ECF. Ignore `.evm/` and
 `build/`; EVM can reconstruct them.
 
+## Examples
+
+- [`hello_time`](examples/hello_time/) uses a library from the Gobo
+  distribution and compiles the same project with Gobo Eiffel and ISE
+  EiffelStudio.
+- [`json`](examples/json/) resolves a pinned GitHub library, creates a JSON
+  object through its API, and prints the serialized value.
+
 ## Documentation
 
 Until a separate documentation website is available, the complete user guide

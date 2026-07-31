@@ -1,0 +1,17 @@
+[project]
+name = "json"
+version = "0.1.0"
+type = "application"
+uuid = "33608956-ed73-454d-b064-3417b07bf2b5"
+ecf = "json.ecf"
+ecf-managed = true
+
+[root]
+class = "APPLICATION"
+feature = "make"
+
+[sources]
+clusters = ["src"]
+
+[dependencies]
+ejson = {git = "https://github.com/eiffelhub/json.git", tag = "v0.11", ecf = "library/json.ecf"}
