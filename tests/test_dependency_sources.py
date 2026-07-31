@@ -348,17 +348,17 @@ def test_distribution_roots_and_library_selection(
 ) -> None:
     ise = tmp_path / "ise"
     gobo = tmp_path / "gobo"
-    (ise / "base").mkdir(parents=True)
-    (ise / "base" / "base.ecf").touch()
+    (ise / "library" / "base").mkdir(parents=True)
+    (ise / "library" / "base" / "base.ecf").touch()
     (gobo / "library" / "xml").mkdir(parents=True)
     (gobo / "library" / "xml" / "custom.ecf").touch()
     monkeypatch.setenv("ISE_LIBRARY", str(ise))
     monkeypatch.setenv("GOBO", str(gobo))
 
-    assert dependencies._distribution_root("ise") == ise
+    assert dependencies._distribution_root("ise") == ise / "library"
     assert dependencies._distribution_root("gobo") == gobo / "library"
-    assert dependencies._find_distribution_library(ise, "base", None) == (
-        ise / "base",
+    assert dependencies._find_distribution_library(ise / "library", "base", None) == (
+        ise / "library" / "base",
         "base.ecf",
     )
     assert dependencies._find_distribution_library(gobo / "library", "xml", "custom.ecf") == (

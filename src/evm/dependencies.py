@@ -67,6 +67,8 @@ def resolve_dependencies(
     resolved: dict[str, LockedPackage] = {}
     resolving: list[str] = []
     state = _ResolutionState(project, resolved, resolving, offline, previous)
+    for dependency in project.dependencies:
+        ensure_dependency_is_not_implicit_runtime(dependency)
     selected = [
         dependency
         for dependency in project.dependencies
@@ -186,7 +188,6 @@ def _resolve_dependency(
     dependency: Dependency,
     state: _ResolutionState,
 ) -> None:
-    ensure_dependency_is_not_implicit_runtime(dependency)
     if dependency.name in state.resolving:
         cycle = " -> ".join((*state.resolving, dependency.name))
         raise EvmError(f"dependency cycle detected: {cycle}")
@@ -717,10 +718,7 @@ def _distribution_root(adapter: str) -> Path:
     variable = "ISE_LIBRARY" if adapter == "ise" else "GOBO"
     value = os.environ.get(variable)
     if value:
-        root = Path(value)
-        if adapter == "gobo":
-            root /= "library"
-        return root.resolve()
+        return (Path(value) / "library").resolve()
     if adapter == "ise" and os.environ.get("ISE_EIFFEL"):
         return (Path(os.environ["ISE_EIFFEL"]) / "library").resolve()
     if adapter == "ise":

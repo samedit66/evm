@@ -148,6 +148,7 @@ def test_explain_json_includes_conditions(tmp_path: Path, monkeypatch) -> None:
         + 'when = { os = "macos", mode = "dev" }\n'
         + 'sources = ["src"]\n'
     )
+    monkeypatch.setattr("evm.project.platform.system", lambda: "Darwin")
     monkeypatch.chdir(project)
 
     result = runner.invoke(main, ["explain", "--json"])

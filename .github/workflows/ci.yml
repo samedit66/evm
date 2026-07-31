@@ -24,6 +24,7 @@ jobs:
         uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
+          version: 0.11.24
 
       - name: Install Python
         uses: actions/setup-python@v5
@@ -70,6 +71,7 @@ jobs:
         uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
+          version: 0.11.24
 
       - name: Install Python
         uses: actions/setup-python@v5

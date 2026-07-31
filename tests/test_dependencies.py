@@ -9,13 +9,14 @@ import pytest
 from click.testing import CliRunner
 from lxml import etree
 
+import evm.dependencies as dependencies
 from evm.cli import main
 from evm.dependencies import install_dependencies, resolve_dependencies
 from evm.ecf import generate_ecf
 from evm.errors import EvmError
-from evm.lockfile import load_lock
+from evm.lockfile import LockedPackage, LockFile, load_lock
 from evm.manifest import load_manifest
-from evm.model import Dependency
+from evm.model import Dependency, Project
 from evm.project import create_project
 
 
@@ -28,6 +29,43 @@ def test_resolver_rejects_programmatic_implicit_runtime_dependency(tmp_path: Pat
         resolve_dependencies(project_with_runtime_dependency)
 
     assert not (project.directory / ".evm" / "deps").exists()
+
+
+def test_resolver_accepts_implicit_runtime_discovered_from_iron(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = create_project(tmp_path / "hello")
+    json_dependency = Dependency(name="json", source="iron", version="25.02")
+    project = replace(project, dependencies=(json_dependency,))
+    base_dependency = Dependency(
+        name="base",
+        source="iron",
+        version="25.02",
+        ecf="base.ecf",
+    )
+    packages = {
+        "json": LockedPackage(name="json", version="25.02", source="iron+repository"),
+        "base": LockedPackage(name="base", version="25.02", source="iron+repository"),
+    }
+
+    def resolve_iron_fixture(
+        _project: Project,
+        dependency: Dependency,
+        *,
+        offline: bool,
+        previous: LockFile | None,
+    ) -> tuple[LockedPackage, Project | None, tuple[Dependency, ...]]:
+        del offline, previous
+        discovered = (base_dependency,) if dependency.name == "json" else ()
+        return packages[dependency.name], None, discovered
+
+    monkeypatch.setattr(dependencies, "_resolve_iron", resolve_iron_fixture)
+
+    lock = resolve_dependencies(project)
+
+    assert {package.name for package in lock.packages} == {"base", "json"}
+    assert lock.package("json").dependencies == ("base",)
 
 
 @pytest.mark.parametrize(

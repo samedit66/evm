@@ -47,7 +47,7 @@ def test_generated_application_builds_with_real_toolchain(
 @pytest.mark.parametrize(
     ("adapter", "name", "library"),
     [
-        pytest.param("ise", "time", None, marks=pytest.mark.ise),
+        pytest.param("ise", "testing", None, marks=pytest.mark.ise),
         pytest.param("gobo", "gobo_xml", "xml", marks=pytest.mark.gobo),
     ],
 )
