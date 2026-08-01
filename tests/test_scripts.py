@@ -54,6 +54,11 @@ def test_script_inherits_nearest_project_without_changing_ecf(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     project = create_project(tmp_path / "project")
+    project.manifest_path.write_text(
+        project.manifest_path.read_text()
+        + '\n[toolchain]\ndefault = "gobo@26.06"\nmatrix = ["gobo@26.06"]\n'
+    )
+    project = load_manifest(project.manifest_path)
     tool = project.directory / "tools" / "report.e"
     tool.parent.mkdir()
     tool.write_text("class REPORT create make feature make do end end\n")
@@ -67,6 +72,7 @@ def test_script_inherits_nearest_project_without_changing_ecf(
     assert prepared.project.configuration_directory == project.directory
     assert prepared.project.state_directory == project.state_directory
     assert prepared.project.build_root == prepared.cache_directory / "build"
+    assert prepared.project.toolchain == project.toolchain
     assert project.ecf_path.read_bytes() == original_ecf
 
 

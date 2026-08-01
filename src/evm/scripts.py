@@ -279,6 +279,7 @@ def _script_project(
         targets=(Target("default", root, source_clusters),),
         conditions=conditions,
         compilers=source_project.compilers if source_project is not None else (),
+        toolchain=source_project.toolchain if source_project is not None else None,
         requires=source_project.requires if source_project is not None else (),
         compiler_arguments=(
             source_project.compiler_arguments if source_project is not None else {}

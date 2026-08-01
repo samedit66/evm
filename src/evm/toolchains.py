@@ -136,7 +136,7 @@ def _selection_policy(
     if selector is not None:
         constraint = _constraint_for(project, selector.provider)
         candidates = (CompilerRequirement(selector.provider, constraint),)
-        mode = "environment" if selector_source in {"EVM_TOOLCHAIN", "EVM_COMPILER"} else "explicit"
+        mode = "environment" if selector_source == "EVM_TOOLCHAIN" else "explicit"
         return _SelectionPolicy(candidates, mode, selector_source or "--toolchain")
     if project.compilers:
         return _SelectionPolicy(
@@ -311,9 +311,6 @@ def _requested_selector(
     environment = os.environ.get("EVM_TOOLCHAIN")
     if environment:
         return ToolchainSelector.parse(environment), "EVM_TOOLCHAIN"
-    legacy = os.environ.get("EVM_COMPILER")
-    if legacy:
-        return ToolchainSelector.parse(legacy), "EVM_COMPILER"
     if project.toolchain is not None:
         return ToolchainSelector.parse(project.toolchain.default), "toolchain.default"
     return None, None

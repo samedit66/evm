@@ -181,7 +181,6 @@ _ENVIRONMENT_VARIABLES = (
     "ISE_LIBRARY",
     "GOBO",
     "EVM_TOOLCHAIN",
-    "EVM_COMPILER",
 )
 
 
@@ -209,7 +208,7 @@ def discover_environment(
 
 
 def _evm_candidates(environment: Mapping[str, str]) -> list[_Candidate]:
-    selected = environment.get("EVM_TOOLCHAIN") or environment.get("EVM_COMPILER")
+    selected = environment.get("EVM_TOOLCHAIN")
     candidates: list[_Candidate] = []
     for installation in list_installations(user_toolchain_root(environment)):
         component_id = "ise-ec" if installation.provider == "ise" else "gobo-gec"

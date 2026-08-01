@@ -33,7 +33,7 @@ $ evm build --compiler gobo
 Or select it through the environment:
 
 ```console
-$ EVM_COMPILER=gobo evm build
+$ EVM_TOOLCHAIN=gobo evm build
 ```
 
 Without an explicit choice, EVM deterministically prefers a compatible ISE

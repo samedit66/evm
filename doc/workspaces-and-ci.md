@@ -81,14 +81,14 @@ For deterministic CI:
 
 - commit `Eiffel.toml`, `Eiffel.lock`, and the managed ECF;
 - use `evm install --locked`;
-- select the compiler explicitly with `--compiler` or `EVM_COMPILER`;
+- select the compiler explicitly with `--toolchain` or `EVM_TOOLCHAIN`;
 - use `--offline` after all required sources have been populated;
 - do not treat `.evm/`, `build/`, `EIFGENs`, or generated C as portable state.
 
 Example environment selection:
 
 ```console
-$ EVM_COMPILER=gobo evm test --json
+$ EVM_TOOLCHAIN=gobo evm test --json
 ```
 
 An offline verification step can ensure that a populated build does not access

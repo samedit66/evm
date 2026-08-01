@@ -659,7 +659,7 @@ evm build --toolchain gobo@26.06
 semantic IDs.
 
 Переменная окружения `EVM_TOOLCHAIN` принимает тот же селектор и валидируется
-тем же registry. `EVM_COMPILER` временно читается как legacy alias:
+тем же registry:
 
 ```shell
 EVM_TOOLCHAIN=ise@25.12 evm build
@@ -1715,7 +1715,7 @@ C toolchains:
 Минимальный каталог discovery ДОЛЖЕН включать `ec`, `gec`, `gecc`, `gelint`,
 `getest`, `iron`, GCC, Clang, Apple Clang, MSVC, `clang-cl` и Zig. Команда
 ДОЛЖНА проверять известные переменные `ISE_EIFFEL`, `ISE_PLATFORM`,
-`ISE_LIBRARY`, `GOBO`, `EVM_TOOLCHAIN` и legacy `EVM_COMPILER`, не раскрывая значения неизвестных или
+`ISE_LIBRARY`, `GOBO` и `EVM_TOOLCHAIN`, не раскрывая значения неизвестных или
 чувствительных переменных.
 
 На Unix EVM ДОЛЖЕН учитывать executable bit и символические ссылки. На macOS

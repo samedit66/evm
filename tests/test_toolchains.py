@@ -42,7 +42,7 @@ def test_explicit_compiler_wins_over_environment(
             None,
         ),
     }
-    monkeypatch.setenv("EVM_COMPILER", "gobo")
+    monkeypatch.setenv("EVM_TOOLCHAIN", "gobo")
     monkeypatch.setattr("evm.toolchains.detect_all", lambda: detections)
 
     selected = select_toolchain(project, "ise")
@@ -70,7 +70,7 @@ def test_compatibility_order_controls_automatic_selection(
             None,
         ),
     }
-    monkeypatch.delenv("EVM_COMPILER", raising=False)
+    monkeypatch.delenv("EVM_TOOLCHAIN", raising=False)
     monkeypatch.setattr("evm.toolchains.detect_all", lambda: detections)
 
     assert select_toolchain(project).adapter == "gobo"
@@ -91,12 +91,31 @@ def test_automatic_selection_skips_incompatible_preferred_compiler(
         "ise": Detection(Path("/bin/ec"), NumericVersion.parse("25.12"), None),
         "gobo": Detection(Path("/bin/gec"), NumericVersion.parse("26.06"), None),
     }
-    monkeypatch.delenv("EVM_COMPILER", raising=False)
+    monkeypatch.delenv("EVM_TOOLCHAIN", raising=False)
     monkeypatch.setattr("evm.toolchains.detect_all", lambda: detections)
 
     selected = select_toolchain(project)
 
     assert selected.adapter == "ise"
+
+
+def test_deprecated_compiler_environment_variable_is_ignored(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = create_project(tmp_path / "hello")
+    detections = {
+        "ise": Detection(Path("/bin/ec"), NumericVersion.parse("25.12"), None),
+        "gobo": Detection(Path("/bin/gec"), NumericVersion.parse("26.06"), None),
+    }
+    monkeypatch.delenv("EVM_TOOLCHAIN", raising=False)
+    monkeypatch.setenv("EVM_COMPILER", "gobo")
+    monkeypatch.setattr("evm.toolchains.detect_all", lambda: detections)
+
+    selected = select_toolchain(project)
+
+    assert selected.adapter == "ise"
+    assert selected.selection == "automatic"
 
 
 def test_unknown_compiler_id_is_rejected(tmp_path: Path) -> None:

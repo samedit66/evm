@@ -278,6 +278,15 @@ def test_empty_discovery_is_successful_and_json_is_stable(tmp_path: Path) -> Non
     assert "none found" in "\n".join(discovery_lines(result))
 
 
+def test_discovery_ignores_deprecated_compiler_environment_variable(tmp_path: Path) -> None:
+    result = discover_environment(
+        {"PATH": str(tmp_path), "EVM_COMPILER": "gobo"},
+        "Linux",
+    )
+
+    assert "EVM_COMPILER" not in {variable.name for variable in result.environment}
+
+
 def test_discover_cli_emits_structured_json(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
