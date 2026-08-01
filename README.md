@@ -218,6 +218,10 @@ project workflows, and multi-package workspaces.
 For normative behavior, file formats, design boundaries, and acceptance
 criteria, see [`SPEC.md`](SPEC.md).
 
+## License
+
+EVM is licensed under the [Apache License 2.0](LICENSE).
+
 ---
 
 <div align="center">
