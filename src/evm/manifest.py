@@ -28,8 +28,10 @@ from evm.model import (
     Task,
     TaskStep,
     TestConfiguration,
+    ToolchainConfiguration,
 )
-from evm.versioning import NumericVersion, validate_constraint
+from evm.toolchain_types import ToolchainSelector
+from evm.versioning import NumericVersion, satisfies, validate_constraint
 
 MANIFEST_NAME = "Eiffel.toml"
 _TOP_LEVEL = {
@@ -37,6 +39,7 @@ _TOP_LEVEL = {
     "root",
     "sources",
     "compatibility",
+    "toolchain",
     "requires",
     "targets",
     "conditions",
@@ -133,6 +136,7 @@ def parse_manifest(content: str, path: Path) -> Project:
     _validate_target_graph(targets)
 
     compilers = _parse_compilers(document.get("compatibility"))
+    toolchain = _parse_toolchain(document.get("toolchain"), compilers)
     requires = _parse_requires(document.get("requires"))
     conditions = _parse_conditions(
         document.get("conditions"),
@@ -162,6 +166,7 @@ def parse_manifest(content: str, path: Path) -> Project:
         targets=tuple(targets),
         conditions=conditions,
         compilers=compilers,
+        toolchain=toolchain,
         requires=requires,
         compiler_arguments=compiler_arguments,
         dependencies=dependencies,
@@ -520,6 +525,54 @@ def _parse_compilers(value: Any) -> tuple[CompilerRequirement, ...]:
         result.append(CompilerRequirement(adapter, constraint))
         seen.add(adapter)
     return tuple(result)
+
+
+def _parse_toolchain(
+    value: Any,
+    compilers: tuple[CompilerRequirement, ...],
+) -> ToolchainConfiguration | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise EvmError("toolchain must be a table")
+    _reject_unknown(value, {"default", "matrix"}, "toolchain")
+    default = _required_string(value, "default", "toolchain.default")
+    matrix = _string_list(value.get("matrix"), "toolchain.matrix") or (default,)
+    if default not in matrix:
+        raise EvmError("toolchain.default must appear in toolchain.matrix")
+    if len(matrix) != len(set(matrix)):
+        raise EvmError("toolchain.matrix contains a duplicate selector")
+    selectors = tuple(_exact_toolchain_selector(item) for item in matrix)
+    for selector in selectors:
+        _validate_toolchain_compatibility(selector, compilers)
+    return ToolchainConfiguration(default, matrix)
+
+
+def _exact_toolchain_selector(value: str) -> ToolchainSelector:
+    selector = ToolchainSelector.parse(value)
+    if selector.version is None or selector.version in {"latest", "beta", "nightly"}:
+        raise EvmError(f"project toolchain selector must contain an exact numeric version: {value}")
+    NumericVersion.parse(selector.version)
+    return selector
+
+
+def _validate_toolchain_compatibility(
+    selector: ToolchainSelector,
+    compilers: tuple[CompilerRequirement, ...],
+) -> None:
+    if not compilers:
+        return
+    requirement = next(
+        (item for item in compilers if item.adapter == selector.provider),
+        None,
+    )
+    if requirement is None:
+        raise EvmError(f"toolchain {selector} is not allowed by compatibility.compilers")
+    if not satisfies(NumericVersion.parse(selector.version or ""), requirement.constraint):
+        raise EvmError(
+            f"toolchain {selector} does not satisfy compatibility constraint "
+            f"{requirement.constraint}"
+        )
 
 
 def _parse_requires(value: Any) -> tuple[tuple[str, str], ...]:

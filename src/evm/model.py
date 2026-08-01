@@ -35,6 +35,12 @@ class CompilerRequirement:
 
 
 @dataclass(frozen=True)
+class ToolchainConfiguration:
+    default: str
+    matrix: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class Dependency:
     name: str
     source: str
@@ -108,6 +114,7 @@ class Project:
     targets: tuple[Target, ...]
     conditions: tuple[Condition, ...] = ()
     compilers: tuple[CompilerRequirement, ...] = ()
+    toolchain: ToolchainConfiguration | None = None
     requires: tuple[tuple[str, str], ...] = ()
     compiler_arguments: dict[str, tuple[str, ...]] = field(default_factory=dict)
     dependencies: tuple[Dependency, ...] = ()

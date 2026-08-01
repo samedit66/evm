@@ -8,6 +8,8 @@ from lxml import etree
 
 from evm.autotest import (
     AutoTestCase,
+    AutoTestDiagnostic,
+    AutoTestRunRequest,
     _filter_autotest_cases,
     _generate_runner_project,
     _parse_descendants,
@@ -16,10 +18,13 @@ from evm.autotest import (
     _run_raw_case,
     _runner_ecf,
     _runner_source,
+    run_autotest,
 )
 from evm.errors import EvmError
 from evm.model import BuildRequest
 from evm.project import create_project
+from evm.toolchains import Toolchain
+from evm.versioning import NumericVersion
 
 
 def test_parses_effective_autotest_descendants() -> None:
@@ -253,3 +258,74 @@ def test_runner_ecf_preserves_legacy_namespace(tmp_path: Path) -> None:
 
     namespaces = {etree.QName(element).namespace for element in generated.iter()}
     assert namespaces == {namespace}
+
+
+def test_run_autotest_aggregates_normalized_and_raw_results(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = create_project(tmp_path / "hello")
+    toolchain = Toolchain(
+        "ise",
+        tmp_path / "ec",
+        NumericVersion.parse("25.12"),
+        "explicit",
+        "--toolchain",
+    )
+    cases = (
+        AutoTestCase("HELLO_TESTS", "test_pass"),
+        AutoTestCase("HELLO_TESTS", "test_fail"),
+    )
+    monkeypatch.setattr("evm.autotest.prepare_project", lambda *args, **kwargs: False)
+    monkeypatch.setattr("evm.autotest.prepare_compilation_project", lambda value, selected: value)
+    monkeypatch.setattr(
+        "evm.autotest.prepare_build_directory", lambda *args, **kwargs: tmp_path / "build"
+    )
+    monkeypatch.setattr("evm.autotest._discover_autotest_cases", lambda context: cases)
+    monkeypatch.setattr("evm.autotest._generate_runner_project", lambda *args: project)
+    monkeypatch.setattr("evm.autotest._compile_runner", lambda *args: tmp_path / "runner")
+
+    def run_case(executable: Path, directory: Path, case: AutoTestCase) -> AutoTestDiagnostic:
+        status = "passed" if case.feature == "test_pass" else "failed"
+        return AutoTestDiagnostic(case, status)
+
+    monkeypatch.setattr("evm.autotest._run_case", run_case)
+    normalized = run_autotest(
+        project,
+        BuildRequest(),
+        toolchain,
+        AutoTestRunRequest(),
+    )
+    monkeypatch.setattr(
+        "evm.autotest._run_raw_case",
+        lambda executable, directory, case: (
+            "passed" if case.feature == "test_pass" else "unresolved"
+        ),
+    )
+    raw = run_autotest(
+        project,
+        BuildRequest(),
+        toolchain,
+        AutoTestRunRequest(raw=True),
+    )
+
+    assert normalized.tests == 2
+    assert normalized.failed == 1
+    assert [item.qualified_name for item in normalized.failed_tests] == ["HELLO_TESTS.test_fail"]
+    assert normalized.exit_code == 1
+    assert raw.unresolved == 1
+    assert raw.unresolved_tests == ()
+
+
+def test_run_autotest_requires_ise(tmp_path: Path) -> None:
+    project = create_project(tmp_path / "hello")
+    toolchain = Toolchain(
+        "gobo",
+        tmp_path / "gec",
+        NumericVersion.parse("26.06"),
+        "explicit",
+        "--toolchain",
+    )
+
+    with pytest.raises(EvmError, match="requires the ISE"):
+        run_autotest(project, BuildRequest(), toolchain, AutoTestRunRequest())

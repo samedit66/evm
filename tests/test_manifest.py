@@ -220,3 +220,121 @@ def test_manifest_rejects_unknown_test_runner(tmp_path: Path) -> None:
 
     with pytest.raises(EvmError, match=r"test\.runner must be one of"):
         load_manifest(path)
+
+
+@pytest.mark.parametrize(
+    ("addition", "message"),
+    [
+        ("unknown = 1\n", "unknown manifest field"),
+        ("package = 1\n", "package must be a table"),
+        ("[package]\niron = 1\n", "package.iron must be a table"),
+        ("[package]\nlinks = 1\n", "package.links must be a table"),
+        ("test = 1\n", "test must be a table"),
+        ("scripts = 1\n", "scripts must be a table"),
+        ("workspace = 1\n", "workspace must be a table"),
+        ("compatibility = 1\n", "compatibility must be a table"),
+        ("toolchain = 1\n", "toolchain must be a table"),
+        ("requires = 1\n", "requires must be a table"),
+        ("conditions = 1\n", "conditions must use"),
+        ("compiler = 1\n", "compiler must be a table"),
+        ("ecf = 1\n", "ecf must be a table"),
+        ("dependencies = 1\n", "dependencies must be a table"),
+        ("patch = 1\n", "patch must be a table"),
+        ('[test]\ntarget = "missing"\n', "unknown target"),
+        ("[scripts]\n'bad name' = \"check\"\n", "not a valid task name"),
+        ("[scripts]\nci = 1\n", "command string or table"),
+        ("[scripts.ci]\nsteps = []\n", "non-empty array"),
+        ('[scripts]\nci = ""\n', "must contain one EVM command"),
+        ('[scripts]\nci = "check && build"\n', "without shell operators"),
+        (
+            '[scripts.ci]\nsteps = [{ command = "check", release = 1 }]\n',
+            "must be a string or boolean",
+        ),
+        (
+            '[scripts.ci]\nsteps = [{ command = "task" }]\n',
+            "unknown task",
+        ),
+        ('[targets.other]\nroot = "INVALID"\n', "must have the form"),
+        ("[targets.other]\nextends = 1\n", "extends must be a string"),
+        ('[targets.other]\nsources = ["src"]\n', "requires root or extends"),
+        ('[compatibility]\ncompilers = ["other"]\n', "unknown compiler adapter"),
+        (
+            '[compatibility]\ncompilers = ["gobo", "gobo"]\n',
+            "duplicate compiler adapter",
+        ),
+        ("[requires]\nconcurrency = 1\n", "must be a string"),
+        ('[requires]\nconcurrency = "parallel"\n', "invalid requires"),
+        ('[[conditions]]\ntarget = "missing"\nwhen = { os = "unix" }\n', "unknown target"),
+        ('[[conditions]]\nwhen = {}\nsources = ["src"]\n', "non-empty inline"),
+        (
+            '[[conditions]]\nwhen = { unknown = "x" }\nsources = ["src"]\n',
+            "allowed",
+        ),
+        ('[[conditions]]\nwhen = { os = 1 }\nsources = ["src"]\n', "non-empty string"),
+        ('[[conditions]]\nwhen = { os = "plan9" }\nsources = ["src"]\n', "allowed"),
+        ('[[conditions]]\nwhen = { os = "unix" }\n', "must define"),
+        ("[compiler]\nother = {}\n", "unknown compiler adapter"),
+        ("[compiler]\ngobo = 1\n", "compiler.gobo must be a table"),
+        ("[dependencies]\n'bad name' = \"1.0\"\n", "invalid dependency name"),
+        ("[dependencies]\nfoo = 1\n", "version string or inline table"),
+        ('[dependencies]\nfoo = { source = "git", git = "x" }\n', "exactly one"),
+        (
+            '[dependencies]\nfoo = { source = "iron", version = "1", tag = "x" }\n',
+            "only valid for Git",
+        ),
+        ('[dependencies]\nfoo = { source = "git", tag = "x" }\n', "git is required"),
+        ('[dependencies]\nfoo = { source = "path" }\n', "path is required"),
+        ('[dependencies]\nfoo = { source = "gobo" }\n', "library is required"),
+        ('[dependencies]\nfoo = { source = "iron" }\n', "version is required"),
+        ('[dependencies]\nfoo = { source = "other" }\n', "source must be one of"),
+        (
+            '[dependencies]\nfoo = { git = "x", path = "y", tag = "v" }\n',
+            "conflicting dependency sources",
+        ),
+        ('[patch]\nfoo = { path = "local" }\n', "does not match"),
+    ],
+)
+def test_manifest_rejects_invalid_section_boundaries(
+    tmp_path: Path,
+    addition: str,
+    message: str,
+) -> None:
+    project = create_project(tmp_path / "hello")
+    project.manifest_path.write_text(addition + "\n" + project.manifest_path.read_text())
+
+    with pytest.raises(EvmError, match=message):
+        load_manifest(project.manifest_path)
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "message"),
+    [
+        ('name = "hello"', 'name = "1bad"', "project.name"),
+        ('version = "0.1.0"', 'version = "one"', "project.version"),
+        ('type = "application"', 'type = "unknown"', "project.type"),
+        (
+            "uuid = ",
+            'uuid = "not-a-uuid" # ',
+            "project.uuid",
+        ),
+        ("ecf-managed = true", 'ecf-managed = "yes"', "ecf-managed"),
+        ('ecf = "hello.ecf"', 'ecf = ""', "project.ecf"),
+    ],
+)
+def test_manifest_rejects_invalid_project_metadata(
+    tmp_path: Path,
+    old: str,
+    new: str,
+    message: str,
+) -> None:
+    project = create_project(tmp_path / "hello")
+    content = project.manifest_path.read_text()
+    if old == "uuid = ":
+        line = next(line for line in content.splitlines() if line.startswith("uuid = "))
+        content = content.replace(line, new + line)
+    else:
+        content = content.replace(old, new)
+    project.manifest_path.write_text(content)
+
+    with pytest.raises(EvmError, match=message):
+        load_manifest(project.manifest_path)

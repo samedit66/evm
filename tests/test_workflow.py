@@ -19,7 +19,12 @@ from evm.testing import _find_assertion_line
 from evm.testing import test_project as run_project_tests
 from evm.toolchains import Toolchain
 from evm.versioning import NumericVersion
-from evm.workspace import load_workspace, workspace_tree_lines
+from evm.workspace import (
+    is_workspace_member_dependency,
+    load_project_context,
+    load_workspace,
+    workspace_tree_lines,
+)
 
 
 def test_manifest_parses_structured_and_short_tasks(tmp_path: Path) -> None:
@@ -447,6 +452,69 @@ def test_workspace_dependency_ecf_path_is_relative_to_package(tmp_path: Path) ->
 
     assert project.state_directory == tmp_path / ".evm"
     assert empty_lock(project).packages == ()
+
+
+def test_project_context_finds_parent_workspace_and_selected_dependencies(tmp_path: Path) -> None:
+    core = tmp_path / "core"
+    app = tmp_path / "app"
+    _write_package(core, "core")
+    _write_package(app, "app", dependencies='core = { path = "../core" }')
+    (tmp_path / "Eiffel.toml").write_text('[workspace]\nmembers = ["app", "core"]\n')
+
+    context = load_project_context(app)
+
+    assert context.project is not None
+    assert context.project.name == "app"
+    assert context.workspace is not None
+    assert [item.name for item in context.workspace.ordered_packages("app")] == ["core", "app"]
+    assert is_workspace_member_dependency(context.project, "../core")
+    assert not is_workspace_member_dependency(context.project, "../missing")
+    with pytest.raises(EvmError, match="unknown workspace package"):
+        context.workspace.package("missing")
+    with pytest.raises(EvmError, match="unknown workspace package"):
+        context.workspace.ordered_packages("missing")
+
+
+@pytest.mark.parametrize(
+    ("workspace", "message"),
+    [
+        ("workspace = 1\n", "workspace must be a table"),
+        ("[workspace]\nunknown = true\n", "unknown manifest field"),
+        ("[workspace]\nmembers = []\n", "non-empty array"),
+        ('[workspace]\nmembers = [""]\n', "non-empty string"),
+        ('[workspace]\nmembers = ["../outside"]\n', "escapes the workspace root"),
+    ],
+)
+def test_workspace_rejects_invalid_boundaries(
+    tmp_path: Path,
+    workspace: str,
+    message: str,
+) -> None:
+    manifest = tmp_path / "Eiffel.toml"
+    manifest.write_text(workspace)
+
+    with pytest.raises(EvmError, match=message):
+        load_workspace(manifest)
+
+
+def test_workspace_rejects_duplicate_and_mismatched_package_names(tmp_path: Path) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    _write_package(first, "same")
+    _write_package(second, "same")
+    manifest = tmp_path / "Eiffel.toml"
+    manifest.write_text('[workspace]\nmembers = ["first", "second"]\n')
+    with pytest.raises(EvmError, match="must be unique"):
+        load_workspace(manifest)
+
+    (second / "Eiffel.toml").write_text(_manifest("second"))
+    (first / "Eiffel.toml").write_text(
+        _manifest("first") + '\n[dependencies]\nwrong = { path = "../second" }\n'
+    )
+    workspace = load_workspace(manifest)
+    assert workspace is not None
+    with pytest.raises(EvmError, match="points to package"):
+        workspace.ordered_packages()
 
 
 def test_check_json_is_machine_readable(tmp_path: Path, monkeypatch) -> None:

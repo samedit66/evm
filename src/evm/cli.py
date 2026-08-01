@@ -25,7 +25,7 @@ from evm.ecf import semantic_diff
 from evm.errors import EvmError
 from evm.filesystem import atomic_write
 from evm.iron import IRON_PACKAGE_NAME, serialize_iron_package
-from evm.lockfile import LOCK_NAME, load_lock
+from evm.lockfile import LOCK_NAME, ensure_lock_matches, load_lock
 from evm.model import BuildRequest, Dependency, Project
 from evm.project import (
     compile_project,
@@ -41,6 +41,32 @@ from evm.project import (
 from evm.scripts import ScriptRunRequest, run_script
 from evm.tasks import run_task
 from evm.testing import TestDiagnostic, TestRequest, TestResult, test_project
+from evm.toolchain_commands import (
+    configure_project_toolchains,
+    locked_toolchains_for_current_platform,
+    project_toolchain_selectors,
+    record_installed_toolchains,
+)
+from evm.toolchain_install import (
+    available_artifacts,
+    install_locked_toolchain,
+    install_toolchain,
+)
+from evm.toolchain_store import (
+    list_installations,
+    probe_linked_installation,
+    register_linked_installation,
+    remove_installation,
+    render_environment,
+    select_installation,
+    toolchain_environment,
+    verify_installation,
+)
+from evm.toolchain_types import (
+    ToolchainArtifact,
+    ToolchainInstallation,
+    ToolchainSelector,
+)
 from evm.workspace import ProjectContext, load_project_context, workspace_tree_lines
 
 
@@ -62,7 +88,7 @@ class _AddCommandOptions:
 @dataclass(frozen=True)
 class _TestCommandOptions:
     release: bool
-    compiler: str | None
+    compilers: tuple[str, ...]
     class_name: str | None
     feature: str | None
     offline: bool
@@ -77,7 +103,7 @@ class _TestCommandOptions:
 class _CheckCommandOptions:
     configuration_only: bool
     release: bool
-    compiler: str | None
+    compilers: tuple[str, ...]
     target: str | None
     regenerate_ecf: bool
     package: str | None
@@ -87,7 +113,7 @@ class _CheckCommandOptions:
 @dataclass(frozen=True)
 class _BuildCommandOptions:
     release: bool
-    compiler: str | None
+    compilers: tuple[str, ...]
     target: str | None
     offline: bool
     regenerate_ecf: bool
@@ -106,6 +132,15 @@ class _RunCommandOptions:
     feature: str | None
     manifest_path: Path | None
     standalone: bool
+
+
+@dataclass(frozen=True)
+class _CompilationMatrixOptions:
+    compilers: tuple[str, ...]
+    operation: str
+    output_json: bool
+    check_only: bool
+    request_factory: Callable[[Project, str | None], BuildRequest]
 
 
 def command_errors[**P, R](function: Callable[P, R]) -> Callable[P, R]:
@@ -167,7 +202,14 @@ def init_command(library: bool) -> None:
 @main.command("check")
 @click.option("--configuration-only", is_flag=True, help="Do not invoke an Eiffel compiler.")
 @click.option("--release", is_flag=True, help="Check the release mode.")
-@click.option("--compiler", type=str, help="Compiler adapter ID: ise or gobo.")
+@click.option(
+    "--toolchain",
+    "--compiler",
+    "compiler",
+    type=str,
+    multiple=True,
+    help="Toolchain selector, for example ise, gobo, or gobo@26.06.",
+)
 @click.option("--target", help="Target name; defaults to project.default-target.")
 @click.option("--regenerate-ecf", is_flag=True, help="Explicitly overwrite managed ECF.")
 @click.option("--package", type=str, help="Limit a workspace command to one package.")
@@ -179,9 +221,11 @@ def check_command(
     """Validate project configuration and reachable Eiffel classes."""
     options = _check_command_options(raw_options)
     projects = _command_projects(load_project_context(), options.package)
-    results: list[dict[str, str]] = []
-    for project in projects:
-        if options.configuration_only:
+    if options.configuration_only:
+        if options.compilers:
+            raise EvmError("--toolchain cannot be combined with --configuration-only")
+        results: list[dict[str, object]] = []
+        for project in projects:
             changed = prepare_project(
                 project,
                 regenerate=options.regenerate_ecf,
@@ -189,28 +233,43 @@ def check_command(
             )
             if changed and not options.output_json:
                 click.echo(f"Generated {project.ecf_path}")
-        else:
-            compile_project(
-                project,
-                BuildRequest(
-                    compiler=options.compiler,
-                    target=options.target or project.default_target,
-                    release=options.release,
-                    regenerate_ecf=options.regenerate_ecf,
-                ),
-                check_only=True,
-                announce=not options.output_json,
-            )
-        results.append({"package": project.name, "status": "passed"})
-        if not options.output_json:
-            click.echo(f"{project.name}: project check completed.")
-    if options.output_json:
-        _echo_json_result("passed", results)
+            results.append({"package": project.name, "status": "passed"})
+            if not options.output_json:
+                click.echo(f"{project.name}: project check completed.")
+        if options.output_json:
+            _echo_json_result("passed", results)
+        return
+
+    def check_request(project: Project, compiler: str | None) -> BuildRequest:
+        return BuildRequest(
+            compiler=compiler,
+            target=options.target or project.default_target,
+            release=options.release,
+            regenerate_ecf=options.regenerate_ecf,
+        )
+
+    _run_compilation_matrix(
+        projects,
+        _CompilationMatrixOptions(
+            options.compilers,
+            "project check",
+            options.output_json,
+            True,
+            check_request,
+        ),
+    )
 
 
 @main.command("build")
 @click.option("--release", is_flag=True, help="Build in release mode.")
-@click.option("--compiler", type=str, help="Compiler adapter ID: ise or gobo.")
+@click.option(
+    "--toolchain",
+    "--compiler",
+    "compiler",
+    type=str,
+    multiple=True,
+    help="Toolchain selector, for example ise, gobo, or gobo@26.06.",
+)
 @click.option("--target", help="Target name; defaults to project.default-target.")
 @click.option("--offline", is_flag=True, help="Forbid network access.")
 @click.option("--regenerate-ecf", is_flag=True, help="Explicitly overwrite managed ECF.")
@@ -223,24 +282,26 @@ def build_command(
     """Build an Eiffel application or library."""
     options = _build_command_options(raw_options)
     projects = _command_projects(load_project_context(), options.package)
-    results: list[dict[str, str]] = []
-    for project in projects:
-        compile_project(
-            project,
-            BuildRequest(
-                compiler=options.compiler,
-                target=options.target or project.default_target,
-                release=options.release,
-                regenerate_ecf=options.regenerate_ecf,
-                offline=options.offline,
-            ),
-            announce=not options.output_json,
+
+    def build_request(project: Project, compiler: str | None) -> BuildRequest:
+        return BuildRequest(
+            compiler=compiler,
+            target=options.target or project.default_target,
+            release=options.release,
+            regenerate_ecf=options.regenerate_ecf,
+            offline=options.offline,
         )
-        results.append({"package": project.name, "status": "passed"})
-        if not options.output_json:
-            click.echo(f"{project.name}: build completed.")
-    if options.output_json:
-        _echo_json_result("passed", results)
+
+    _run_compilation_matrix(
+        projects,
+        _CompilationMatrixOptions(
+            options.compilers,
+            "build",
+            options.output_json,
+            False,
+            build_request,
+        ),
+    )
 
 
 @main.command(
@@ -248,7 +309,13 @@ def build_command(
     context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
 )
 @click.option("--release", is_flag=True, help="Build and run in release mode.")
-@click.option("--compiler", type=str, help="Compiler adapter ID: ise or gobo.")
+@click.option(
+    "--toolchain",
+    "--compiler",
+    "compiler",
+    type=str,
+    help="Toolchain selector, for example ise, gobo, or gobo@26.06.",
+)
 @click.option("--target", help="Target name; defaults to project.default-target.")
 @click.option("--offline", is_flag=True, help="Forbid network access.")
 @click.option("--regenerate-ecf", is_flag=True, help="Explicitly overwrite managed ECF.")
@@ -314,11 +381,210 @@ def discover_command(output_json: bool) -> None:
         click.echo("\n".join(discovery_lines(result)))
 
 
+@main.group("toolchain")
+def toolchain_group() -> None:
+    """Install and manage user-level Eiffel toolchains."""
+
+
+@toolchain_group.command("list")
+@click.argument("provider", required=False, type=click.Choice(["ise", "gobo"]))
+@click.option("--available", is_flag=True, help="Show releases available for download.")
+@click.option("--json", "output_json", is_flag=True, help="Emit stable JSON for CI.")
+@command_errors
+def toolchain_list_command(
+    provider: str | None,
+    available: bool,
+    output_json: bool,
+) -> None:
+    """List installed toolchains or official releases."""
+    if available:
+        providers = (provider,) if provider else ("ise", "gobo")
+        artifacts = tuple(
+            artifact
+            for selected_provider in providers
+            for artifact in available_artifacts(selected_provider)
+        )
+        if output_json:
+            click.echo(
+                json.dumps(
+                    {"toolchains": [_artifact_data(item) for item in artifacts]},
+                    sort_keys=True,
+                )
+            )
+            return
+        for artifact in artifacts:
+            click.echo(
+                f"{artifact.provider}@{artifact.version}\t{artifact.channel}\t"
+                f"{artifact.platform.identifier}"
+            )
+        return
+    installations = tuple(
+        item for item in list_installations() if provider is None or item.provider == provider
+    )
+    if output_json:
+        click.echo(
+            json.dumps(
+                {"toolchains": [_installation_data(item) for item in installations]},
+                sort_keys=True,
+            )
+        )
+        return
+    if not installations:
+        click.echo("No EVM-managed or linked toolchains installed.")
+        return
+    click.echo("TOOLCHAIN\tREVISION\tKIND\tPLATFORM\tLOCATION")
+    for installation in installations:
+        click.echo(
+            f"{installation.selector}\t{installation.revision}\t{installation.kind.value}\t"
+            f"{installation.platform.identifier}\t{installation.root}"
+        )
+
+
+@toolchain_group.command("install")
+@click.argument("selectors", nargs=-1)
+@click.option("--project", "project_mode", is_flag=True, help="Install the project matrix.")
+@click.option("--locked", is_flag=True, help="Require exact artifacts from Eiffel.lock.")
+@click.option("--offline", is_flag=True, help="Use only the download cache.")
+@command_errors
+def toolchain_install_command(
+    selectors: tuple[str, ...],
+    project_mode: bool,
+    locked: bool,
+    offline: bool,
+) -> None:
+    """Install toolchains into the shared user store."""
+    if project_mode and selectors:
+        raise EvmError("SELECTOR and --project are mutually exclusive")
+    if locked and not project_mode:
+        raise EvmError("--locked requires --project")
+    if project_mode:
+        project = _require_project(load_project_context())
+        installed = _install_project_toolchains(project, locked=locked, offline=offline)
+        record_installed_toolchains(project, installed)
+    else:
+        if not selectors:
+            raise EvmError("provide at least one SELECTOR or use --project")
+        installed = tuple(
+            install_toolchain(ToolchainSelector.parse(value), offline=offline)
+            for value in selectors
+        )
+    for installation in installed:
+        click.echo(f"Installed {installation.identity} at {installation.root}")
+
+
+@toolchain_group.command("use")
+@click.argument("selectors", nargs=-1, required=True)
+@click.option("--install", "install_missing", is_flag=True, help="Install configured releases.")
+@command_errors
+def toolchain_use_command(selectors: tuple[str, ...], install_missing: bool) -> None:
+    """Set the default and compilation matrix for the current project."""
+    project = _require_project(load_project_context())
+    parsed = tuple(ToolchainSelector.parse(value) for value in selectors)
+    proposed, _ = configure_project_toolchains(project, parsed)
+    click.echo(f"Updated {proposed.manifest_path}")
+    click.echo(f"Updated {proposed.directory / LOCK_NAME}")
+    if install_missing:
+        installed = []
+        for selector in project_toolchain_selectors(proposed):
+            installation = install_toolchain(selector)
+            installed.append(installation)
+            click.echo(f"Installed {installation.identity} at {installation.root}")
+        record_installed_toolchains(proposed, tuple(installed))
+
+
+@toolchain_group.command("link")
+@click.argument("path", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@command_errors
+def toolchain_link_command(path: Path) -> None:
+    """Register an existing EiffelStudio or Gobo installation."""
+    installation = probe_linked_installation(path)
+    register_linked_installation(installation)
+    click.echo(f"Linked {installation.identity} at {installation.root}")
+
+
+@toolchain_group.command("remove")
+@click.argument("selector")
+@click.option("--force", is_flag=True, help="Remove a toolchain selected by this project.")
+@command_errors
+def toolchain_remove_command(selector: str, force: bool) -> None:
+    """Remove a managed toolchain or linked registration."""
+    parsed = ToolchainSelector.parse(selector)
+    installation = select_installation(parsed)
+    project = _optional_project_context()
+    if not force and project is not None and project.toolchain is not None:
+        configured = {ToolchainSelector.parse(item) for item in project.toolchain.matrix}
+        if any(installation.matches(item) for item in configured):
+            raise EvmError(
+                f"{installation.selector} is selected by the current project; use --force"
+            )
+    remove_installation(installation)
+    action = "Unlinked" if installation.kind.value == "linked" else "Removed"
+    click.echo(f"{action} {installation.identity}")
+
+
+@toolchain_group.command("verify")
+@click.argument("selector", required=False)
+@click.option("--project", "project_mode", is_flag=True, help="Verify the project matrix.")
+@click.option("--json", "output_json", is_flag=True, help="Emit stable JSON for CI.")
+@command_errors
+def toolchain_verify_command(
+    selector: str | None,
+    project_mode: bool,
+    output_json: bool,
+) -> None:
+    """Verify compiler executables and reported versions."""
+    if selector is not None and project_mode:
+        raise EvmError("SELECTOR and --project are mutually exclusive")
+    installations = _verification_installations(selector, project_mode)
+    results = []
+    failed = False
+    for installation in installations:
+        diagnostics = verify_installation(installation)
+        failed = failed or bool(diagnostics)
+        results.append(
+            {
+                "toolchain": installation.identity,
+                "status": "failed" if diagnostics else "passed",
+                "diagnostics": list(diagnostics),
+            }
+        )
+        if not output_json:
+            click.echo(f"{installation.identity}: {'FAILED' if diagnostics else 'passed'}")
+            for diagnostic in diagnostics:
+                click.echo(f"  {diagnostic}")
+    if output_json:
+        click.echo(json.dumps({"status": "failed" if failed else "passed", "toolchains": results}))
+    if failed:
+        raise click.exceptions.Exit(1)
+
+
+@toolchain_group.command("env")
+@click.argument("selector", required=False)
+@click.option(
+    "--shell",
+    type=click.Choice(["bash", "zsh", "sh", "powershell", "dotenv"]),
+    default="sh",
+    show_default=True,
+)
+@command_errors
+def toolchain_env_command(selector: str | None, shell: str) -> None:
+    """Print environment changes for a selected toolchain."""
+    installation = _selected_or_project_installation(selector)
+    environment = toolchain_environment(installation, {})
+    click.echo(render_environment(environment, shell), nl=False)
+
+
 @main.command("explain")
 @click.option("--targets", "show_targets", is_flag=True, help="List effective targets.")
 @click.option("--target", help="Target name; defaults to project.default-target.")
 @click.option("--release", is_flag=True, help="Explain release mode.")
-@click.option("--compiler", type=str, help="Compiler adapter ID: ise or gobo.")
+@click.option(
+    "--toolchain",
+    "--compiler",
+    "compiler",
+    type=str,
+    help="Toolchain selector, for example ise, gobo, or gobo@26.06.",
+)
 @click.option("--json", "output_mode", flag_value="json", help="Emit stable JSON.")
 @click.option(
     "--ecf-diff",
@@ -592,7 +858,14 @@ def deps_command(package: str | None, show_workspace: bool) -> None:
 
 @main.command("test")
 @click.option("--release", is_flag=True, help="Build tests in release mode.")
-@click.option("--compiler", type=str, help="Compiler adapter ID: ise or gobo.")
+@click.option(
+    "--toolchain",
+    "--compiler",
+    "compiler",
+    type=str,
+    multiple=True,
+    help="Toolchain selector, for example ise, gobo, or gobo@26.06.",
+)
 @click.option("--class", "class_name", type=str, help="Run one supported test class.")
 @click.option("--feature", type=str, help="Run one supported test feature.")
 @click.option("--offline", is_flag=True, help="Forbid network access.")
@@ -613,26 +886,29 @@ def test_command(
     results: list[dict[str, object]] = []
     failed_code = 0
     for project in projects:
-        result = test_project(
-            project,
-            TestRequest(
-                compiler=options.compiler,
-                release=options.release,
-                class_name=options.class_name,
-                feature=options.feature,
-                offline=options.offline,
-                regenerate_ecf=options.regenerate_ecf,
-                raw=options.raw,
-            ),
-        )
-        data = {"package": project.name, **result.as_dict()}
-        results.append(data)
-        failed_code = failed_code or result.exit_code
-        if not options.output_json and not options.raw:
-            if options.trace:
-                _print_trace_test_result(project.name, result)
-            else:
-                _print_concise_test_result(project.name, result)
+        for compiler in _requested_toolchains(project, options.compilers):
+            result = test_project(
+                project,
+                TestRequest(
+                    compiler=compiler,
+                    release=options.release,
+                    class_name=options.class_name,
+                    feature=options.feature,
+                    offline=options.offline,
+                    regenerate_ecf=options.regenerate_ecf,
+                    raw=options.raw,
+                ),
+            )
+            label = compiler or "automatic"
+            data = {"package": project.name, "toolchain": label, **result.as_dict()}
+            results.append(data)
+            failed_code = failed_code or result.exit_code
+            if not options.output_json and not options.raw:
+                heading = project.name if compiler is None else f"{project.name} [{label}]"
+                if options.trace:
+                    _print_trace_test_result(heading, result)
+                else:
+                    _print_concise_test_result(heading, result)
     if options.output_json:
         _echo_json_result("failed" if failed_code else "passed", results)
     if failed_code:
@@ -781,6 +1057,118 @@ def clean_command(dependencies: bool, unused: bool) -> None:
     click.echo(f"Removed {target}")
 
 
+def _install_project_toolchains(
+    project: Project,
+    *,
+    locked: bool,
+    offline: bool,
+) -> tuple[ToolchainInstallation, ...]:
+    if locked:
+        lock = load_lock(project.directory / LOCK_NAME)
+        ensure_lock_matches(project, lock)
+        toolchains = locked_toolchains_for_current_platform(lock)
+        if not toolchains:
+            raise EvmError("Eiffel.lock has no toolchain artifact for the current platform")
+        return tuple(install_locked_toolchain(item, offline=offline) for item in toolchains)
+    return tuple(
+        install_toolchain(selector, offline=offline)
+        for selector in project_toolchain_selectors(project)
+    )
+
+
+def _verification_installations(
+    selector: str | None,
+    project_mode: bool,
+) -> tuple[ToolchainInstallation, ...]:
+    if selector is not None:
+        return (select_installation(ToolchainSelector.parse(selector)),)
+    if project_mode:
+        project = _require_project(load_project_context())
+        return tuple(select_installation(item) for item in project_toolchain_selectors(project))
+    installations = list_installations()
+    if not installations:
+        raise EvmError("no EVM-managed or linked toolchains installed")
+    return installations
+
+
+def _selected_or_project_installation(selector: str | None) -> ToolchainInstallation:
+    if selector is not None:
+        return select_installation(ToolchainSelector.parse(selector))
+    project = _optional_project_context()
+    if project is not None and project.toolchain is not None:
+        return select_installation(ToolchainSelector.parse(project.toolchain.default))
+    installations = list_installations()
+    if len(installations) == 1:
+        return installations[0]
+    raise EvmError("select a toolchain explicitly or configure toolchain.default")
+
+
+def _optional_project_context() -> Project | None:
+    try:
+        return load_project_context().project
+    except EvmError as error:
+        if "Eiffel.toml not found" in str(error):
+            return None
+        raise
+
+
+def _installation_data(installation: ToolchainInstallation) -> dict[str, object]:
+    return {
+        "provider": installation.provider,
+        "version": installation.version,
+        "revision": installation.revision,
+        "kind": installation.kind.value,
+        "platform": installation.platform.identifier,
+        "root": str(installation.root),
+        "executable": str(installation.executable),
+        "checksum": installation.checksum,
+        "source": installation.source,
+    }
+
+
+def _artifact_data(artifact: ToolchainArtifact) -> dict[str, object]:
+    return {
+        "provider": artifact.provider,
+        "version": artifact.version,
+        "revision": artifact.revision,
+        "channel": artifact.channel,
+        "platform": artifact.platform.identifier,
+        "url": artifact.url,
+        "checksum": artifact.checksum,
+    }
+
+
+def _requested_toolchains(
+    project: Project,
+    requested: tuple[str, ...],
+) -> tuple[str | None, ...]:
+    if not requested:
+        return (None,)
+    if "all" not in requested:
+        parsed = tuple(str(ToolchainSelector.parse(item)) for item in requested)
+        if len(parsed) != len(set(parsed)):
+            raise EvmError("duplicate --toolchain selector")
+        return parsed
+    if requested != ("all",):
+        raise EvmError("--toolchain all cannot be combined with other selectors")
+    if project.toolchain is not None:
+        return project.toolchain.matrix
+    if project.compilers:
+        return tuple(item.adapter for item in project.compilers)
+    installations = list_installations()
+    selected = list(
+        dict.fromkeys(
+            item.identity
+            for provider in ("ise", "gobo")
+            for item in installations
+            if item.provider == provider
+        )
+    )
+    if not selected:
+        raise EvmError("no installed toolchains are available for --toolchain all")
+    return tuple(selected)
+
+
 def _package_spec(value: str) -> tuple[str, str | None]:
     if "@" not in value:
         return value, None
@@ -809,7 +1197,7 @@ def _add_command_options(values: Mapping[str, Any]) -> _AddCommandOptions:
 def _test_command_options(values: Mapping[str, Any]) -> _TestCommandOptions:
     return _TestCommandOptions(
         release=values["release"],
-        compiler=values["compiler"],
+        compilers=tuple(values["compiler"]),
         class_name=values["class_name"],
         feature=values["feature"],
         offline=values["offline"],
@@ -825,7 +1213,7 @@ def _check_command_options(values: Mapping[str, Any]) -> _CheckCommandOptions:
     return _CheckCommandOptions(
         configuration_only=values["configuration_only"],
         release=values["release"],
-        compiler=values["compiler"],
+        compilers=tuple(values["compiler"]),
         target=values["target"],
         regenerate_ecf=values["regenerate_ecf"],
         package=values["package"],
@@ -836,7 +1224,7 @@ def _check_command_options(values: Mapping[str, Any]) -> _CheckCommandOptions:
 def _build_command_options(values: Mapping[str, Any]) -> _BuildCommandOptions:
     return _BuildCommandOptions(
         release=values["release"],
-        compiler=values["compiler"],
+        compilers=tuple(values["compiler"]),
         target=values["target"],
         offline=values["offline"],
         regenerate_ecf=values["regenerate_ecf"],
@@ -915,6 +1303,44 @@ def _command_projects(
 
 def _echo_json_result(status: str, packages: list[dict[str, object]]) -> None:
     click.echo(json.dumps({"status": status, "packages": packages}, sort_keys=True))
+
+
+def _run_compilation_matrix(
+    projects: tuple[Project, ...],
+    options: _CompilationMatrixOptions,
+) -> None:
+    results: list[dict[str, object]] = []
+    failures: list[str] = []
+    for project in projects:
+        for compiler in _requested_toolchains(project, options.compilers):
+            label = compiler or "automatic"
+            try:
+                compile_project(
+                    project,
+                    options.request_factory(project, compiler),
+                    check_only=options.check_only,
+                    announce=not options.output_json,
+                )
+            except EvmError as error:
+                failures.append(f"{project.name} [{label}]: {error}")
+                results.append(
+                    {
+                        "package": project.name,
+                        "toolchain": label,
+                        "status": "failed",
+                        "diagnostics": [str(error)],
+                    }
+                )
+                continue
+            results.append({"package": project.name, "toolchain": label, "status": "passed"})
+            if not options.output_json:
+                click.echo(f"{project.name} [{label}]: {options.operation} completed.")
+    if options.output_json:
+        _echo_json_result("failed" if failures else "passed", results)
+    if failures:
+        if options.output_json:
+            raise click.exceptions.Exit(1)
+        raise EvmError("toolchain matrix failed:\n" + "\n".join(f"  - {item}" for item in failures))
 
 
 def _run_nested_command(arguments: tuple[str, ...]) -> int:

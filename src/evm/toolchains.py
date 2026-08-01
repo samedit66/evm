@@ -12,6 +12,12 @@ from pathlib import Path
 
 from evm.errors import EvmError
 from evm.model import BuildRequest, CompilerRequirement, Project
+from evm.toolchain_store import list_installations, toolchain_environment
+from evm.toolchain_types import (
+    ToolchainInstallation,
+    ToolchainSelector,
+    current_toolchain_platform,
+)
 from evm.versioning import NumericVersion, satisfies
 
 KNOWN_ADAPTERS = ("ise", "gobo")
@@ -49,7 +55,11 @@ class _SelectionPolicy:
 
 
 def detect_all() -> dict[str, Detection]:
-    return {adapter: detect(adapter) for adapter in KNOWN_ADAPTERS}
+    managed = list_installations()
+    return {
+        adapter: _managed_detection(adapter, managed) or detect(adapter)
+        for adapter in KNOWN_ADAPTERS
+    }
 
 
 def detect(adapter: str) -> Detection:
@@ -87,8 +97,17 @@ def detect(adapter: str) -> Detection:
 
 
 def select_toolchain(project: Project, explicit: str | None = None) -> Toolchain:
-    policy = _selection_policy(project, explicit)
+    selector, selector_source = _requested_selector(project, explicit)
+    policy = _selection_policy(project, selector, selector_source)
     detections = detect_all()
+    if selector is not None:
+        selected_detection = _detection_for_selector(selector)
+        if selected_detection is not None:
+            detections[selector.provider] = selected_detection
+        elif selector.version not in {None, "latest"}:
+            raise EvmError(
+                f"toolchain {selector} is not installed; run `evm toolchain install {selector}`"
+            )
     rejected: list[str] = []
     for requirement in policy.candidates:
         detected = detections[requirement.adapter]
@@ -109,16 +128,16 @@ def select_toolchain(project: Project, explicit: str | None = None) -> Toolchain
     raise EvmError(f"no compatible Eiffel toolchain found:\n{details}\nrun `evm discover`")
 
 
-def _selection_policy(project: Project, explicit: str | None) -> _SelectionPolicy:
-    environment = os.environ.get("EVM_COMPILER")
-    if explicit is not None:
-        _validate_adapter(explicit)
-        candidates = (CompilerRequirement(explicit, _constraint_for(project, explicit)),)
-        return _SelectionPolicy(candidates, "explicit", "--compiler")
-    if environment:
-        _validate_adapter(environment)
-        candidates = (CompilerRequirement(environment, _constraint_for(project, environment)),)
-        return _SelectionPolicy(candidates, "environment", "EVM_COMPILER")
+def _selection_policy(
+    project: Project,
+    selector: ToolchainSelector | None,
+    selector_source: str | None,
+) -> _SelectionPolicy:
+    if selector is not None:
+        constraint = _constraint_for(project, selector.provider)
+        candidates = (CompilerRequirement(selector.provider, constraint),)
+        mode = "environment" if selector_source in {"EVM_TOOLCHAIN", "EVM_COMPILER"} else "explicit"
+        return _SelectionPolicy(candidates, mode, selector_source or "--toolchain")
     if project.compilers:
         return _SelectionPolicy(
             project.compilers,
@@ -226,7 +245,8 @@ def run_compiler(
     capture_output: bool = False,
 ) -> None:
     environment = os.environ.copy()
-    adapter = "gobo" if Path(command[0]).name == "gec" else "ise"
+    environment.update(dict(toolchain_environment_values(command)))
+    adapter = "gobo" if Path(command[0]).stem.casefold() == "gec" else "ise"
     environment["evm_compiler"] = adapter
     environment["evm_architecture"] = platform.machine().lower()
     environment["ZIG_GLOBAL_CACHE_DIR"] = str(working_directory / ".zig-global-cache")
@@ -254,6 +274,14 @@ def run_compiler(
         )
 
 
+def toolchain_environment_values(command: list[str]) -> tuple[tuple[str, str], ...]:
+    executable = Path(command[0]).resolve()
+    installation = _installation_for_executable(executable)
+    if installation is None:
+        return ()
+    return tuple(toolchain_environment(installation, {}).items())
+
+
 def artifact_candidates(
     toolchain: Toolchain,
     project: Project,
@@ -272,6 +300,74 @@ def artifact_candidates(
 def _validate_adapter(adapter: str) -> None:
     if adapter not in KNOWN_ADAPTERS:
         raise EvmError(f"unknown compiler adapter {adapter!r}; known adapters: ise, gobo")
+
+
+def _requested_selector(
+    project: Project,
+    explicit: str | None,
+) -> tuple[ToolchainSelector | None, str | None]:
+    if explicit is not None:
+        return ToolchainSelector.parse(explicit), "--toolchain"
+    environment = os.environ.get("EVM_TOOLCHAIN")
+    if environment:
+        return ToolchainSelector.parse(environment), "EVM_TOOLCHAIN"
+    legacy = os.environ.get("EVM_COMPILER")
+    if legacy:
+        return ToolchainSelector.parse(legacy), "EVM_COMPILER"
+    if project.toolchain is not None:
+        return ToolchainSelector.parse(project.toolchain.default), "toolchain.default"
+    return None, None
+
+
+def _managed_detection(
+    adapter: str,
+    installations: tuple[ToolchainInstallation, ...],
+) -> Detection | None:
+    platform_identifier = current_toolchain_platform().identifier
+    installation = next(
+        (
+            item
+            for item in installations
+            if item.provider == adapter
+            and item.platform.identifier == platform_identifier
+            and item.executable.is_file()
+        ),
+        None,
+    )
+    if installation is None:
+        return None
+    return Detection(
+        installation.executable,
+        NumericVersion.parse(installation.revision),
+        None,
+    )
+
+
+def _installation_for_executable(executable: Path) -> ToolchainInstallation | None:
+    resolved = executable.resolve()
+    return next(
+        (item for item in list_installations() if item.executable.resolve() == resolved),
+        None,
+    )
+
+
+def _detection_for_selector(selector: ToolchainSelector) -> Detection | None:
+    platform_identifier = current_toolchain_platform().identifier
+    installation = next(
+        (
+            item
+            for item in list_installations()
+            if item.matches(selector) and item.platform.identifier == platform_identifier
+        ),
+        None,
+    )
+    if installation is None:
+        return None
+    return Detection(
+        installation.executable,
+        NumericVersion.parse(installation.revision),
+        None,
+    )
 
 
 def _constraint_for(project: Project, adapter: str) -> str | None:
@@ -297,4 +393,4 @@ def _build_directory(
 ) -> Path:
     mode = "release" if request.release else "dev"
     root = project.build_root or project.directory / "build"
-    return root / toolchain.adapter / request.target / mode
+    return root / toolchain.adapter / str(toolchain.version) / request.target / mode

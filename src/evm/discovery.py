@@ -11,6 +11,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from evm.toolchain_store import list_installations, user_toolchain_root
+
 _DISCOVERY_SCHEMA_VERSION = 1
 _VERSION_TIMEOUT_SECONDS = 5
 _VERSION_OUTPUT_LIMIT = 16_384
@@ -178,6 +180,7 @@ _ENVIRONMENT_VARIABLES = (
     "ISE_PLATFORM",
     "ISE_LIBRARY",
     "GOBO",
+    "EVM_TOOLCHAIN",
     "EVM_COMPILER",
 )
 
@@ -189,6 +192,7 @@ def discover_environment(
     current_environment = os.environ if environment is None else environment
     current_system = platform.system() if system is None else system
     candidates = [
+        *_evm_candidates(current_environment),
         *_environment_candidates(current_environment, current_system),
         *_path_candidates(current_environment, current_system),
         *_platform_candidates(current_environment, current_system),
@@ -202,6 +206,23 @@ def discover_environment(
         ordered,
         _environment_status(current_environment),
     )
+
+
+def _evm_candidates(environment: Mapping[str, str]) -> list[_Candidate]:
+    selected = environment.get("EVM_TOOLCHAIN") or environment.get("EVM_COMPILER")
+    candidates: list[_Candidate] = []
+    for installation in list_installations(user_toolchain_root(environment)):
+        component_id = "ise-ec" if installation.provider == "ise" else "gobo-gec"
+        source = f"evm-{installation.kind.value}:{installation.selector}"
+        candidates.append(
+            _Candidate(
+                _specification(component_id),
+                installation.executable,
+                (source,),
+                selected in {installation.provider, installation.selector},
+            )
+        )
+    return candidates
 
 
 def discovery_lines(result: DiscoveryResult) -> list[str]:

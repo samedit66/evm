@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import tomllib
-from dataclasses import dataclass, fields
+from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +15,8 @@ from evm.errors import EvmError
 from evm.model import Dependency, Project
 
 LOCK_NAME = "Eiffel.lock"
-LOCK_FORMAT_VERSION = 1
+LOCK_FORMAT_VERSION = 2
+_SUPPORTED_LOCK_FORMATS = {1, LOCK_FORMAT_VERSION}
 
 
 @dataclass(frozen=True)
@@ -48,9 +49,21 @@ class LockedPackage:
 
 
 @dataclass(frozen=True)
+class LockedToolchain:
+    provider: str
+    version: str
+    revision: str
+    platform: str
+    architecture: str
+    source: str
+    checksum: str | None = None
+
+
+@dataclass(frozen=True)
 class LockFile:
     manifest_fingerprint: str
     packages: tuple[LockedPackage, ...]
+    toolchains: tuple[LockedToolchain, ...] = ()
     format_version: int = LOCK_FORMAT_VERSION
 
     def package(self, name: str) -> LockedPackage:
@@ -62,7 +75,21 @@ class LockFile:
 
 def manifest_fingerprint(project: Project) -> str:
     dependencies = [_dependency_identity(item) for item in project.dependencies]
-    encoded = json.dumps(dependencies, sort_keys=True, separators=(",", ":")).encode()
+    toolchain = asdict(project.toolchain) if project.toolchain is not None else None
+    return _fingerprint({"dependencies": dependencies, "toolchain": toolchain})
+
+
+def _legacy_manifest_fingerprint(project: Project) -> str:
+    dependencies = [_dependency_identity(item) for item in project.dependencies]
+    return _fingerprint(dependencies)
+
+
+def _fingerprint(value: object) -> str:
+    encoded = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
     return hashlib.sha256(encoded).hexdigest()
 
 
@@ -77,10 +104,10 @@ def load_lock(path: Path) -> LockFile:
         raise EvmError(f"lock file not found: {path}; run `evm update`") from error
     except (OSError, UnicodeError, tomllib.TOMLDecodeError) as error:
         raise EvmError(f"cannot parse {path}: {error}") from error
-    if document.get("format-version") != LOCK_FORMAT_VERSION:
+    source_format = document.get("format-version")
+    if source_format not in _SUPPORTED_LOCK_FORMATS:
         raise EvmError(
-            f"unsupported lock format {document.get('format-version')!r}; "
-            f"expected {LOCK_FORMAT_VERSION}"
+            f"unsupported lock format {source_format!r}; expected 1 or {LOCK_FORMAT_VERSION}"
         )
     fingerprint = document.get("manifest-fingerprint", "")
     if not isinstance(fingerprint, str):
@@ -92,11 +119,24 @@ def load_lock(path: Path) -> LockFile:
     names = [package.name for package in packages]
     if len(names) != len(set(names)):
         raise EvmError("Eiffel.lock contains duplicate package names")
-    return LockFile(fingerprint, packages)
+    raw_toolchains = document.get("toolchain", [])
+    if not isinstance(raw_toolchains, list):
+        raise EvmError("toolchain in Eiffel.lock must be an array of tables")
+    toolchains = tuple(_parse_toolchain(raw, index) for index, raw in enumerate(raw_toolchains))
+    identities = [
+        (item.provider, item.revision, item.platform, item.architecture) for item in toolchains
+    ]
+    if len(identities) != len(set(identities)):
+        raise EvmError("Eiffel.lock contains duplicate toolchain artifacts")
+    return LockFile(fingerprint, packages, toolchains, source_format)
 
 
 def ensure_lock_matches(project: Project, lock: LockFile) -> None:
-    expected = manifest_fingerprint(project)
+    expected = (
+        _legacy_manifest_fingerprint(project)
+        if lock.format_version == 1 and project.toolchain is None
+        else manifest_fingerprint(project)
+    )
     if lock.manifest_fingerprint != expected:
         raise EvmError(
             "Eiffel.toml and Eiffel.lock are inconsistent; "
@@ -111,14 +151,25 @@ def serialize_lock(lock: LockFile) -> bytes:
     package_array = tomlkit.aot()
     for package in sorted(lock.packages, key=lambda item: item.name):
         table = tomlkit.table()
-        for field in fields(package):
-            value = getattr(package, field.name)
+        for name, value in asdict(package).items():
             if value in (None, (), False):
                 continue
             rendered = list(value) if isinstance(value, tuple) else value
-            table.add(field.name.replace("_", "-"), rendered)
+            table.add(name.replace("_", "-"), rendered)
         package_array.append(table)
     document.add("package", package_array)
+    toolchain_array = tomlkit.aot()
+    for toolchain in sorted(
+        lock.toolchains,
+        key=lambda item: (item.provider, item.revision, item.platform, item.architecture),
+    ):
+        table = tomlkit.table()
+        for name, value in asdict(toolchain).items():
+            if value is not None:
+                table.add(name.replace("_", "-"), value)
+        toolchain_array.append(table)
+    if toolchain_array:
+        document.add("toolchain", toolchain_array)
     return tomlkit.dumps(document).encode()
 
 
@@ -160,8 +211,24 @@ def _parse_package(raw: Any, index: int) -> LockedPackage:
 
 
 def _dependency_identity(dependency: Dependency) -> dict[str, object]:
-    return {
-        field.name: getattr(dependency, field.name)
-        for field in fields(dependency)
-        if getattr(dependency, field.name) is not None
-    }
+    return {name: value for name, value in asdict(dependency).items() if value is not None}
+
+
+def _parse_toolchain(raw: Any, index: int) -> LockedToolchain:
+    if not isinstance(raw, dict):
+        raise EvmError(f"toolchain[{index}] in Eiffel.lock must be a table")
+    known = {field.name.replace("_", "-") for field in fields(LockedToolchain)}
+    unknown = sorted(set(raw) - known)
+    if unknown:
+        raise EvmError(f"unknown Eiffel.lock field: toolchain[{index}].{unknown[0]}")
+    values: dict[str, str | None] = {}
+    for field in fields(LockedToolchain):
+        key = field.name.replace("_", "-")
+        value = raw.get(key)
+        if value is None and field.name == "checksum":
+            values[field.name] = None
+            continue
+        if not isinstance(value, str) or not value:
+            raise EvmError(f"toolchain[{index}].{key} must be a non-empty string")
+        values[field.name] = value
+    return LockedToolchain(**values)

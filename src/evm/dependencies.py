@@ -91,7 +91,12 @@ def resolve_dependencies(
                 _resolve_dependency(dependency, state)
             else:
                 _copy_locked_closure(package.name, previous, resolved)
-    return LockFile(manifest_fingerprint(project), tuple(sorted(resolved.values(), key=_by_name)))
+    toolchains = previous.toolchains if previous is not None else ()
+    return LockFile(
+        manifest_fingerprint(project),
+        tuple(sorted(resolved.values(), key=_by_name)),
+        toolchains,
+    )
 
 
 def install_dependencies(

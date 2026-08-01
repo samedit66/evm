@@ -9,6 +9,7 @@ from lxml import etree
 
 from evm.cli import main
 from evm.ecf import ECF_NAMESPACE
+from evm.errors import EvmError
 from evm.lockfile import load_lock
 from evm.manifest import load_manifest
 from evm.testing import TestDiagnostic as EvmTestDiagnostic
@@ -24,7 +25,7 @@ def test_new_creates_application_and_stable_ecf(tmp_path: Path, monkeypatch) -> 
     assert created.exit_code == 0, created.output
     assert (project / "Eiffel.toml").is_file()
     lock = load_lock(project / "Eiffel.lock")
-    assert lock.format_version == 1
+    assert lock.format_version == 2
     assert len(lock.manifest_fingerprint) == 64
     assert lock.packages == ()
     assert (project / "src" / "application.e").is_file()
@@ -157,6 +158,73 @@ def test_explain_json_includes_conditions(tmp_path: Path, monkeypatch) -> None:
     data = json.loads(result.output)
     assert data["conditions"][0]["when"] == {"mode": "dev", "os": "macos"}
     assert data["conditions"][0]["matched"] is True
+
+
+def test_explain_supports_target_tables_text_and_ecf_diff(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "hello"
+    runner = CliRunner()
+    assert runner.invoke(main, ["new", str(project)]).exit_code == 0
+    monkeypatch.chdir(project)
+
+    def unavailable_toolchain(*args: object, **kwargs: object) -> None:
+        raise EvmError("not installed")
+
+    monkeypatch.setattr("evm.project.select_toolchain", unavailable_toolchain)
+
+    targets = runner.invoke(main, ["explain", "--targets"])
+    targets_json = runner.invoke(main, ["explain", "--targets", "--json"])
+    text = runner.invoke(main, ["explain"])
+    diff = runner.invoke(main, ["explain", "--ecf-diff"])
+
+    assert targets.exit_code == 0, targets.output
+    assert "TARGET\tROOT\tSOURCES" in targets.output
+    assert json.loads(targets_json.output)[0]["name"] == "default"
+    assert "Target: default" in text.output
+    assert "Toolchain: unavailable" in text.output
+    assert diff.exit_code == 0, diff.output
+
+
+def test_build_failure_and_project_run_preserve_exit_status(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "hello"
+    runner = CliRunner()
+    assert runner.invoke(main, ["new", str(project)]).exit_code == 0
+    monkeypatch.chdir(project)
+
+    def fail_compilation(*args: object, **kwargs: object) -> None:
+        raise EvmError("compiler unavailable")
+
+    monkeypatch.setattr("evm.cli.compile_project", fail_compilation)
+
+    failed = runner.invoke(main, ["build", "--toolchain", "gobo"])
+
+    monkeypatch.setattr("evm.cli.run_project", lambda *args, **kwargs: 9)
+    executed = runner.invoke(main, ["run", "--", "--verbose"])
+
+    assert failed.exit_code == 1
+    assert "toolchain matrix failed" in failed.output
+    assert "compiler unavailable" in failed.output
+    assert executed.exit_code == 9
+
+
+def test_json_command_error_is_machine_readable(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail_discovery() -> None:
+        raise EvmError("discovery failed")
+
+    monkeypatch.setattr("evm.cli.discover_environment", fail_discovery)
+
+    result = CliRunner().invoke(main, ["discover", "--json"])
+
+    assert result.exit_code == 1
+    assert json.loads(result.output) == {
+        "status": "error",
+        "diagnostics": [{"level": "error", "message": "discovery failed"}],
+    }
 
 
 def test_import_preserves_source_and_uuid(tmp_path: Path) -> None:

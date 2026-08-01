@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from lxml import etree
@@ -11,8 +12,11 @@ from evm.dependencies import resolve_dependencies
 from evm.ecf import generate_ecf
 from evm.errors import EvmError
 from evm.manifest import load_manifest
+from evm.model import BuildRequest
 from evm.project import create_project
-from evm.scripts import ScriptRunRequest, prepare_script, run_script
+from evm.scripts import ScriptRunRequest, _compile_script, prepare_script, run_script
+from evm.toolchains import Toolchain
+from evm.versioning import NumericVersion
 
 
 def test_standalone_script_stages_only_explicit_sources(
@@ -130,6 +134,100 @@ def test_script_detects_creation_procedure_on_single_line(
     prepared = prepare_script(ScriptRunRequest(sources=(source,), standalone=True))
 
     assert prepared.root.feature == "make"
+
+
+@pytest.mark.parametrize(
+    ("sources", "message"),
+    [
+        ((), "at least one"),
+        ((Path("hello.txt"),), "not an Eiffel source"),
+        ((Path("missing.e"),), "not found"),
+    ],
+)
+def test_script_validates_source_boundaries(
+    tmp_path: Path,
+    sources: tuple[Path, ...],
+    message: str,
+) -> None:
+    resolved = tuple(tmp_path / source for source in sources)
+
+    with pytest.raises(EvmError, match=message):
+        prepare_script(ScriptRunRequest(sources=resolved, standalone=True))
+
+
+def test_script_rejects_standalone_with_manifest(tmp_path: Path) -> None:
+    project = create_project(tmp_path / "hello")
+    source = project.directory / "src" / "application.e"
+
+    with pytest.raises(EvmError, match="cannot be used together"):
+        prepare_script(
+            ScriptRunRequest(
+                sources=(source,),
+                standalone=True,
+                manifest_path=project.manifest_path,
+            )
+        )
+
+
+def test_compile_script_materializes_ecf_and_finds_executable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "hello.e"
+    source.write_text("class HELLO create make feature make do end end")
+    monkeypatch.setenv("EVM_CACHE_DIR", str(tmp_path / "cache"))
+    prepared = prepare_script(ScriptRunRequest(sources=(source,), standalone=True))
+    toolchain = Toolchain(
+        "gobo",
+        tmp_path / "gec",
+        NumericVersion.parse("26.06.30"),
+        "explicit",
+        "--toolchain",
+    )
+    executable = tmp_path / "application"
+    executable.write_text("binary")
+    monkeypatch.setattr("evm.scripts._prepare_script_dependencies", lambda *args: None)
+    monkeypatch.setattr("evm.scripts.validate_configuration", lambda project: [])
+    monkeypatch.setattr("evm.scripts.generate_ecf", lambda project, lock: b"<ecf/>")
+    monkeypatch.setattr("evm.scripts.select_toolchain", lambda project, compiler: toolchain)
+    monkeypatch.setattr(
+        "evm.scripts.prepare_build_directory", lambda *args, **kwargs: tmp_path / "build"
+    )
+    monkeypatch.setattr("evm.scripts.compiler_command", lambda *args: ["gec"])
+    monkeypatch.setattr("evm.scripts.run_compiler", lambda *args: None)
+    monkeypatch.setattr("evm.scripts.artifact_candidates", lambda *args: (executable,))
+
+    selected, result = _compile_script(prepared, BuildRequest(compiler="gobo"))
+
+    assert selected == toolchain
+    assert result == executable
+    assert prepared.project.ecf_path.read_bytes() == b"<ecf/>"
+
+
+def test_run_script_returns_application_exit_code(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "hello.e"
+    source.write_text("class HELLO create make feature make do end end")
+    monkeypatch.setenv("EVM_CACHE_DIR", str(tmp_path / "cache"))
+    prepared = prepare_script(ScriptRunRequest(sources=(source,), standalone=True))
+    toolchain = Toolchain(
+        "gobo",
+        tmp_path / "gec",
+        NumericVersion.parse("26.06"),
+        "explicit",
+        "--toolchain",
+    )
+    monkeypatch.setattr("evm.scripts.prepare_script", lambda request: prepared)
+    monkeypatch.setattr(
+        "evm.scripts._compile_script", lambda selected, request: (toolchain, tmp_path / "app")
+    )
+    monkeypatch.setattr(
+        "evm.scripts.subprocess.run", lambda *args, **kwargs: SimpleNamespace(returncode=7)
+    )
+
+    assert run_script(ScriptRunRequest(sources=(source,), arguments=("arg",))) == 7
 
 
 @pytest.mark.toolchain

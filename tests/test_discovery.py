@@ -11,6 +11,8 @@ from click.testing import CliRunner
 
 from evm.cli import main
 from evm.discovery import discover_environment, discovery_lines
+from evm.toolchain_store import save_managed_installation
+from evm.toolchain_types import InstallationKind, ToolchainInstallation, current_toolchain_platform
 
 
 def _executable(directory: Path, name: str, output: str, exit_code: int = 0) -> Path:
@@ -60,6 +62,42 @@ def test_merges_path_and_environment_matches_for_gobo(tmp_path: Path) -> None:
     component = next(item for item in result.components if item.component_id == "gobo-gec")
     assert component.path == gec
     assert component.sources == ("environment", "path")
+    assert component.active
+
+
+def test_discovers_evm_managed_toolchain_without_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = tmp_path / "store"
+    monkeypatch.setenv("EVM_TOOLCHAIN_HOME", str(store))
+    platform = current_toolchain_platform()
+    root = store / "managed" / "gobo" / "26.06.30" / platform.identifier / "root"
+    executable = _executable(root / "bin", "gec", "Gobo Eiffel Compiler 26.06.30")
+    save_managed_installation(
+        ToolchainInstallation(
+            "gobo",
+            "26.06",
+            "26.06.30",
+            platform,
+            root,
+            executable,
+            InstallationKind.MANAGED,
+        )
+    )
+
+    result = discover_environment(
+        {
+            "PATH": str(tmp_path / "empty"),
+            "EVM_TOOLCHAIN_HOME": str(store),
+            "EVM_TOOLCHAIN": "gobo@26.06",
+        },
+        platform.operating_system.title(),
+    )
+
+    component = next(item for item in result.components if item.component_id == "gobo-gec")
+    assert component.path == executable
+    assert component.sources == ("evm-managed:gobo@26.06",)
     assert component.active
 
 

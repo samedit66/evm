@@ -4,7 +4,7 @@
 
 **Статус документа:** начальная спецификация
 
-**Версия документа:** 0.7
+**Версия документа:** 0.8
 
 **Основной язык конфигурации:** TOML
 
@@ -635,11 +635,10 @@ target сообщает `concurrency support="none"`; SCOOP включается
 При отсутствии обеих секций обычный проект ДОЛЖЕН собираться автоматическим
 выбором поддерживаемой toolchain.
 
-#### 8.3.1. Идентификаторы compiler adapters
+#### 8.3.1. Идентификаторы и селекторы toolchain
 
-`--compiler` принимает семантический идентификатор adapter, зарегистрированный
-в EVM, а не имя executable, путь или version constraint. Начальная версия
-ДОЛЖНА знать:
+Каноническая опция `--toolchain` принимает семантический идентификатор adapter
+либо селектор точной версии. Начальная версия ДОЛЖНА знать:
 
 | ID | Adapter | Основной executable |
 |---|---|---|
@@ -649,20 +648,22 @@ target сообщает `concurrency support="none"`; SCOOP включается
 Корректные примеры:
 
 ```shell
-evm build --compiler ise
-evm build --compiler gobo
+evm build --toolchain ise
+evm build --toolchain gobo@26.06
 ```
 
 Пути, `ec`, `gec` и выражения вида `gobo >=26.06` НЕ ЯВЛЯЮТСЯ допустимыми
-значениями `--compiler`. Дополнительные adapters МОГУТ регистрировать новые
-стабильные semantic IDs.
+значениями `--toolchain`. Существующая опция `--compiler` является только
+совместимым alias `--toolchain`: две независимые модели выбора НЕ
+ПОДДЕРЖИВАЮТСЯ. Дополнительные adapters МОГУТ регистрировать новые стабильные
+semantic IDs.
 
-Переменная окружения `EVM_COMPILER` принимает ровно тот же semantic ID и
-валидируется тем же registry:
+Переменная окружения `EVM_TOOLCHAIN` принимает тот же селектор и валидируется
+тем же registry. `EVM_COMPILER` временно читается как legacy alias:
 
 ```shell
-EVM_COMPILER=ise evm build
-EVM_COMPILER=gobo evm test
+EVM_TOOLCHAIN=ise@25.12 evm build
+EVM_TOOLCHAIN=gobo@26.06 evm test
 ```
 
 Неизвестный ID ДОЛЖЕН приводить к ошибке со списком известных adapters.
@@ -671,11 +672,12 @@ EVM_COMPILER=gobo evm test
 
 Toolchain выбирается в следующем строгом порядке:
 
-1. явный параметр `--compiler`;
-2. переменная окружения `EVM_COMPILER`;
-3. первый установленный и совместимый элемент
+1. явный параметр `--toolchain`;
+2. переменная окружения `EVM_TOOLCHAIN`;
+3. `[toolchain].default`, если секция задана;
+4. первый установленный и совместимый элемент
    `[compatibility].compilers`, если секция задана;
-4. первый установленный и совместимый adapter во встроенном порядке
+5. первый установленный и совместимый adapter во встроенном порядке
    `ise`, затем `gobo`.
 
 Явный CLI-флаг имеет приоритет над переменной окружения. Автоматическая
@@ -695,11 +697,52 @@ Toolchain выбирается в следующем строгом порядк
 adapters. Если подходящих кандидатов нет, EVM ДОЛЖЕН завершиться до сборки с
 диагностикой причин отклонения и рекомендацией `evm discover`.
 
-Локальный выбор executable и compiler-specific defaults НЕ ДОЛЖЕН попадать в
-`Eiffel.lock`. Специальный `.evm/config.toml` для выбора compiler НЕ
-ИСПОЛЬЗУЕТСЯ. `.evm/state.toml` МОЖЕТ хранить compiler и его версию как
-метаданные созданного артефакта, но это значение НЕ ДОЛЖНО влиять на следующий
-автоматический выбор. Удаление `.evm/` не должно менять алгоритм выбора.
+#### 8.3.3. Проектная политика toolchain
+
+Проект МОЖЕТ зафиксировать основной toolchain и конечную матрицу проверок:
+
+```toml
+[toolchain]
+default = "gobo@26.06"
+matrix = ["gobo@26.06", "ise@25.12"]
+```
+
+В проектном манифесте разрешены только точные числовые версии. Каналы
+`latest`, `beta` и `nightly` разрешаются командой `evm toolchain use`, после
+чего в манифест и lock-файл записывается точная версия. `default` ДОЛЖЕН
+входить в `matrix`; дубликаты запрещены. Ограничения `[compatibility]` остаются
+независимыми и каждый элемент матрицы ДОЛЖЕН им соответствовать.
+
+`evm check`, `evm build` и `evm test` принимают повторяемую опцию
+`--toolchain`. Значение `all` означает всю проектную матрицу, а при ее
+отсутствии — все объявленные совместимые либо все установленные поддерживаемые
+toolchain. Команда выполняет все элементы матрицы, показывает результат
+каждого и возвращает ненулевой код, если не прошел хотя бы один элемент.
+
+Выбор executable, полученный из `PATH`, не фиксируется. Точные загружаемые
+артефакты управляемых toolchain, включая платформу, URL и доступную SHA-256,
+ДОЛЖНЫ попадать в `Eiffel.lock`.
+
+#### 8.3.4. Глобальное хранилище и окружение
+
+Управляемые дистрибутивы ДОЛЖНЫ устанавливаться один раз в пользовательское
+хранилище EVM вне проекта. Путь определяется платформенными соглашениями
+(`XDG_DATA_HOME` на Linux, Application Support на macOS, `LOCALAPPDATA` на
+Windows) и может быть переопределен `EVM_TOOLCHAIN_HOME`. Проект НЕ ДОЛЖЕН
+содержать копию компилятора. Идентичность каталога включает provider, точную
+revision, ОС и архитектуру, поэтому версии и платформы не разделяют файлы.
+
+Существующую внешнюю установку МОЖНО зарегистрировать без копирования командой
+`evm toolchain link PATH`. Удаление такой регистрации НЕ ДОЛЖНО удалять
+внешний каталог. Удаление managed-установки ограничено корнем глобального
+хранилища.
+
+Переменные `GOBO`, `ISE_EIFFEL`, `ISE_LIBRARY`, `ISE_PLATFORM`,
+`EVM_TOOLCHAIN` и `PATH` вычисляются из метаданных выбранной установки для
+каждого дочернего процесса. Это является каноническим механизмом и исключает
+устаревший автоматически изменяемый `.env`. Для интеграции с shell и внешними
+инструментами `evm toolchain env` МОЖЕТ вывести команды shell или формат
+dotenv; вывод не является состоянием проекта.
 
 Capability matrix является внутренней версионируемой базой EVM. Статус
 capability имеет одно из значений `supported`, `partial`, `unsupported` или
@@ -790,7 +833,7 @@ Dev-зависимости ДОЛЖНЫ включаться только в ц�
 Каждая разрешенная зависимость ДОЛЖНА иметь сведения о совместимости с
 заявленными toolchain. Происхождение из ISE, Gobo, IRON или Git само по себе
 НЕ ДОЛЖНО считаться доказательством совместимости или несовместимости.
-`evm check --all-compilers` ДОЛЖЕН проверить ECF, requirements и доступные
+`evm check --toolchain all` ДОЛЖЕН проверить ECF, requirements и доступные
 метаданные зависимости для каждой toolchain. Неизвестная совместимость
 ДОЛЖНА отображаться как `unknown`, а не как `supported`.
 
@@ -1067,6 +1110,17 @@ Lock-файл обязателен для воспроизводимых сбо�
 Пример:
 
 ```toml
+format = 2
+
+[[toolchain]]
+provider = "gobo"
+version = "26.06"
+revision = "26.06.30"
+platform = "linux"
+architecture = "x86_64"
+source = "https://github.com/gobo-eiffel/gobo/releases/download/..."
+checksum = "sha256:..."
+
 [[package]]
 name = "json"
 version = "1.4.2"
@@ -1116,6 +1170,12 @@ ecf = "library/http.ecf"
 - подкаталог и путь к манифесту либо ECF внутри Git-репозитория;
 - признак активной локальной подмены;
 - версию формата lock-файла.
+
+Для каждого управляемого toolchain lock-файл ДОЛЖЕН содержать provider,
+публичную версию, точную revision, ОС, архитектуру и URL архива. Если upstream
+публикует digest, SHA-256 ДОЛЖНА быть записана при разрешении; в остальных
+случаях EVM ДОЛЖЕН вычислить ее при первой загрузке, хранить рядом с cache и
+проверять при повторном использовании.
 
 ### 9.3. Поведение
 
@@ -1286,6 +1346,7 @@ new      init
 add      remove   update   install   deps
 build    run      test     check     clean
 discover explain  import   task
+toolchain
 ```
 
 Редкая интеграция с IRON предоставляется отдельной группой расширения
@@ -1309,6 +1370,7 @@ discover explain  import   task
 | `check` | Проект проверен без требования финального артефакта |
 | `clean` | Удалено явно выбранное производное состояние |
 | `discover` | Обнаружены и описаны локальные Eiffel- и C-компоненты |
+| `toolchain` | Установлены, выбраны, проверены или удалены пользовательские toolchain |
 | `explain` | Показана эффективная конфигурация или ее аспект |
 | `import` | Legacy ECF или `package.iron` преобразован в начальный EVM-проект |
 | `task` | Выполнен объявленный проектный workflow |
@@ -1345,10 +1407,12 @@ Managed ECF, созданный без явного concurrency requirement, Д�
 evm check
 evm build
 evm build --release
-evm build --compiler gobo
-evm build --compiler ise
+evm build --toolchain gobo
+evm build --toolchain ise
+evm build --toolchain all
+evm check --toolchain gobo --toolchain ise
 evm build --offline
-EVM_COMPILER=gobo evm build
+EVM_TOOLCHAIN=gobo@26.06 evm build
 evm run
 evm run --target server -- --port 8080
 ```
@@ -1356,16 +1420,16 @@ evm run --target server -- --port 8080
 Базовое соответствие:
 
 ```text
-evm build --compiler ise
+evm build --toolchain ise
 → ec -batch -config app.ecf -target default
 
-evm build --release --compiler ise
+evm build --release --toolchain ise
 → ec -batch -config app.ecf -target release -finalize
 
-evm build --compiler gobo
+evm build --toolchain gobo
 → gec app.ecf --target=default
 
-evm build --release --compiler gobo
+evm build --release --toolchain gobo
 → gec app.ecf --target=release --finalize
 ```
 
@@ -1398,7 +1462,7 @@ Mode: dev
 `built-in adapter priority: ise before gobo`. Документация ДОЛЖНА
 предупреждать, что изменение набора установленных toolchain может изменить
 автоматический выбор; для стабильной CI-сборки СЛЕДУЕТ задавать
-`EVM_COMPILER`.
+`[toolchain]` и `Eiffel.lock` либо `EVM_TOOLCHAIN`.
 
 Аргументы после `--` в `evm run` ДОЛЖНЫ передаваться запускаемому приложению
 без интерпретации со стороны `evm`.
@@ -1411,7 +1475,7 @@ Eiffel-файлов:
 ```shell
 evm run hello.e
 evm run hello.e some_library.e other_library.e
-evm run --compiler gobo hello.e helper.e -- input.txt --verbose
+evm run --toolchain gobo hello.e helper.e -- input.txt --verbose
 ```
 
 При наличии ведущей последовательности позиционных аргументов с расширением
@@ -1495,7 +1559,7 @@ evm test
 evm test --class STRING_TESTS
 evm test --feature test_append
 evm test --release
-evm test --compiler gobo
+evm test --toolchain gobo
 ```
 
 `evm test` ДОЛЖЕН:
@@ -1589,7 +1653,35 @@ tests/string_tests.e:42
 Поля Tests/Passed/Failed/Unresolved добавляются только когда adapter надежно
 получил эти значения от framework.
 
-### 11.6. Диагностика
+### 11.6. Управление toolchain
+
+Публичная группа ограничена рабочими сценариями:
+
+```shell
+evm toolchain list
+evm toolchain list --available
+evm toolchain install gobo@26.06
+evm toolchain install --project --locked
+evm toolchain use gobo@26.06 ise@25.12
+evm toolchain link /opt/EiffelStudio-25.12
+evm toolchain verify --project
+evm toolchain env gobo@26.06 --shell zsh
+evm toolchain remove gobo@26.06
+```
+
+`list` различает installed и available. `install` загружает, проверяет и
+атомарно материализует архив в глобальном пользовательском хранилище; повторная
+установка является идемпотентной. `use` транзакционно обновляет `[toolchain]` и
+`Eiffel.lock`. `link` регистрирует существующую установку без копирования.
+`verify` проверяет структуру, executable и фактически сообщаемую версию. `env`
+только печатает вычисленное окружение. `remove` удаляет managed-установку либо
+linked-регистрацию и требует `--force`, если текущий проект на нее ссылается.
+
+Отдельной `evm toolchain discover` НЕ СУЩЕСТВУЕТ. `evm discover` является
+единственной полной инвентаризацией и включает managed, linked, окружение,
+`PATH` и платформенные механизмы обнаружения.
+
+### 11.7. Диагностика
 
 ```shell
 evm discover
@@ -1623,7 +1715,7 @@ C toolchains:
 Минимальный каталог discovery ДОЛЖЕН включать `ec`, `gec`, `gecc`, `gelint`,
 `getest`, `iron`, GCC, Clang, Apple Clang, MSVC, `clang-cl` и Zig. Команда
 ДОЛЖНА проверять известные переменные `ISE_EIFFEL`, `ISE_PLATFORM`,
-`ISE_LIBRARY`, `GOBO` и `EVM_COMPILER`, не раскрывая значения неизвестных или
+`ISE_LIBRARY`, `GOBO`, `EVM_TOOLCHAIN` и legacy `EVM_COMPILER`, не раскрывая значения неизвестных или
 чувствительных переменных.
 
 На Unix EVM ДОЛЖЕН учитывать executable bit и символические ссылки. На macOS
@@ -1688,7 +1780,7 @@ code analyzer. Adapter обязан сообщить, если его факти
 модели проекта. Команда предназначена для диагностики и НЕ ДОЛЖНА менять
 файлы.
 
-### 11.7. Объяснение эффективной конфигурации
+### 11.8. Объяснение эффективной конфигурации
 
 ```shell
 evm explain --release
@@ -1744,7 +1836,7 @@ Excluded:
 - преобразование режима сборки в compiler-specific flags;
 - статус обязательных и частично поддерживаемых capabilities.
 
-### 11.8. Очистка локального состояния
+### 11.9. Очистка локального состояния
 
 ```shell
 evm clean
@@ -1911,7 +2003,7 @@ mode: пользователь обязан изучить warnings и явно 
 
 ```toml
 [scripts]
-check-all = "check --all-compilers"
+check-all = "check --toolchain all"
 serve = "run --target server"
 ```
 
@@ -2148,7 +2240,7 @@ Git branch и tag НЕ ДОЛЖНЫ использоваться как един
   capabilities и внешние зависимости.
 
 Совместимость НЕ ДОЛЖНА предполагаться только на основании успешного парсинга
-ECF. `evm check --all-compilers` ДОЛЖЕН проверить требования языка,
+ECF. `evm check --toolchain all` ДОЛЖЕН проверить требования языка,
 compiler-specific параметры и capability matrix каждой заявленной toolchain.
 
 Gobo-адаптер ДОЛЖЕН поддерживать как минимум:
@@ -2196,7 +2288,7 @@ evm add time
 evm add testing --dev
 
 evm build
-evm build --compiler gobo
+evm build --toolchain gobo
 evm run
 evm test
 ```
@@ -2211,7 +2303,7 @@ evm test
 4. `evm build` валидирует согласованность, выполняет locked-синхронизацию в
    `.evm/`, выбирает toolchain, генерирует ECF и вызывает соответствующий
    адаптер.
-5. `evm build --compiler gobo` собирает тот же проект через `gec`.
+5. `evm build --toolchain gobo` собирает тот же проект через `gec`.
 6. `evm run` запускает собранное приложение.
 7. `evm test` выбирает тестовую цель и возвращает нормализованный результат.
 
@@ -2269,7 +2361,7 @@ evm build
 | FR-030 | Система ДОЛЖНА изолировать артефакты по toolchain, target и режиму сборки. |
 | FR-031 | Система ДОЛЖНА поддерживать Gobo distribution libraries как источник зависимостей. |
 | FR-032 | Система ДОЛЖНА предоставлять test adapters, включая возможность интеграции с `getest`. |
-| FR-033 | `evm check --all-compilers` ДОЛЖЕН проверять все заявленные toolchain. |
+| FR-033 | `evm check --toolchain all` ДОЛЖЕН проверять всю проектную матрицу. |
 | FR-034 | Все загружаемые зависимости проекта ДОЛЖНЫ materialize только внутри `<project-or-workspace>/.evm/`; live path/workspace регулируются отдельно. |
 | FR-035 | `build`, `run`, `test` и `check` ДОЛЖНЫ автоматически выполнять `install --locked`. |
 | FR-036 | `install --locked` ДОЛЖЕН восстанавливать `.evm/` исключительно из manifest и lock-файла. |
@@ -2279,9 +2371,9 @@ evm build
 | FR-040 | Resolve, fetch, configuration validation, ECF generation и materialization ДОЛЖНЫ быть внутренними стадиями составных команд. |
 | FR-041 | Граф и причина зависимости ДОЛЖНЫ предоставляться одной командой `evm deps`. |
 | FR-042 | Просмотр targets и semantic ECF diff ДОЛЖНЫ предоставляться через `evm explain`. |
-| FR-043 | `--compiler` и `EVM_COMPILER` ДОЛЖНЫ принимать одинаковый semantic adapter ID. |
+| FR-043 | `--toolchain`, его alias `--compiler` и `EVM_TOOLCHAIN` ДОЛЖНЫ принимать одинаковый selector. |
 | FR-044 | Начальная версия ДОЛЖНА регистрировать adapter IDs `ise` и `gobo`. |
-| FR-045 | `--compiler` ДОЛЖЕН иметь приоритет над `EVM_COMPILER`, а оба — над автоматическим выбором. |
+| FR-045 | `--toolchain` ДОЛЖЕН иметь приоритет над `EVM_TOOLCHAIN`, а оба — над проектным и автоматическим выбором. |
 | FR-046 | Автоматический выбор ДОЛЖЕН учитывать порядок `[compatibility].compilers`, затем встроенный порядок `ise`, `gobo`. |
 | FR-047 | `.evm/state.toml` НЕ ДОЛЖЕН использоваться как источник выбора compiler. |
 | FR-048 | UUID ECF-системы ДОЛЖЕН храниться в manifest и сохраняться при генерации и импорте. |
@@ -2340,7 +2432,7 @@ evm build
 следующие условия:
 
 1. `evm new hello` создает приложение, открываемое в EiffelStudio и собираемое
-   через `evm build --compiler ise` и `evm build --compiler gobo`, если в
+   через `evm build --toolchain ise` и `evm build --toolchain gobo`, если в
    манифесте заявлены обе toolchain.
 2. `evm add` и `evm remove` атомарно поддерживают согласованность
    `Eiffel.toml`, `Eiffel.lock` и управляемого ECF.
@@ -2400,13 +2492,13 @@ evm build
     11.1, и не содержит отдельных `resolve`, `fetch`, `sync`, `validate`,
     `inspect`, `tree`, `why`, `graph`, `prune`, `ecf generate`,
     `ecf format` или `target add/remove`.
-30. `--compiler gobo` и `EVM_COMPILER=gobo` выбирают один adapter, при
+30. `--toolchain gobo` и `EVM_TOOLCHAIN=gobo` выбирают один adapter, при
     одновременном указании побеждает CLI-флаг.
 31. Значения `gec`, `ec`, путь к executable и version constraint отклоняются
     как неизвестные semantic adapter IDs.
 32. При двух установленных совместимых toolchain порядок
     `[compatibility].compilers` определяет выбор.
-33. При отсутствии `[compatibility]`, `--compiler` и `EVM_COMPILER` EVM
+33. При отсутствии `[compatibility]`, `[toolchain]`, `--toolchain` и `EVM_TOOLCHAIN` EVM
     выбирает ISE, если доступны совместимые ISE и Gobo, и Gobo, если это
     единственный совместимый adapter.
 34. Удаление `.evm/` не меняет результат автоматического выбора при неизменном
