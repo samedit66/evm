@@ -55,8 +55,10 @@ EVM offers:
 - portable project tasks and multi-package workspaces;
 - stable JSON output for CI.
 
-EVM does **not** implement an Eiffel compiler or require abandoning
-EiffelStudio, Gobo, or existing ECF-based tooling.
+EVM does **not** implement an Eiffel compiler or ask users to stop using
+EiffelStudio, Gobo, ECF, or other existing Eiffel tools. It brings libraries
+and tools from different vendors together behind a consistent interface while
+keeping their native toolchains and formats accessible.
 
 ## Quick start
 
