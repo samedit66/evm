@@ -33,6 +33,10 @@ from evm.toolchains import (
 from evm.workspace import load_project_context
 
 _SCRIPT_CACHE_FORMAT = 1
+_SCRIPT_CACHE_KEY_LENGTH = 32
+_SCRIPT_FINGERPRINT_FILE = ".fingerprint"
+_WINDOWS_MAX_PATH = 260
+_GOBO_GENERATED_FILE_SAMPLE = "_9999.c"
 _CLASS_DECLARATION_RE = re.compile(
     r"(?im)^\s*(?:(?:deferred|expanded|external|frozen|once)\s+)*class\s+"
     r"([A-Za-z][A-Za-z0-9_]*)\b"
@@ -186,7 +190,19 @@ def _cache_directory(
         if source_project is not None
         else _standalone_cache_root() / "scripts"
     )
-    return root_directory / fingerprint
+    cache_directory = root_directory / fingerprint[:_SCRIPT_CACHE_KEY_LENGTH]
+    _verify_cache_fingerprint(cache_directory, fingerprint)
+    return cache_directory
+
+
+def _verify_cache_fingerprint(cache_directory: Path, fingerprint: str) -> None:
+    fingerprint_path = cache_directory / _SCRIPT_FINGERPRINT_FILE
+    if fingerprint_path.is_file():
+        stored = fingerprint_path.read_text(encoding="ascii").strip()
+        if stored != fingerprint:
+            raise EvmError(f"script cache fingerprint collision: {cache_directory}")
+        return
+    atomic_write(fingerprint_path, f"{fingerprint}\n".encode("ascii"))
 
 
 def _script_fingerprint(
@@ -318,19 +334,16 @@ def _compile_script(
         raise EvmError(f"configuration errors:\n{details}")
     atomic_write(prepared.project.ecf_path, generate_ecf(prepared.project, lock))
     toolchain = select_toolchain(prepared.project, request.compiler)
-    versioned_project = replace(
-        prepared.project,
-        build_root=prepared.cache_directory / "build" / f"{toolchain.adapter}-{toolchain.version}",
-    )
     lock_path = prepared.cache_directory / f"compile-{toolchain.adapter}.lock"
     with FileLock(lock_path):
-        build_directory = prepare_build_directory(toolchain, versioned_project, request)
-        command = compiler_command(toolchain, versioned_project, request)
+        build_directory = prepare_build_directory(toolchain, prepared.project, request)
+        _validate_gobo_build_path(toolchain, build_directory, prepared.project.name)
+        command = compiler_command(toolchain, prepared.project, request)
         run_compiler(command, build_directory)
     executable = next(
         (
             candidate
-            for candidate in artifact_candidates(toolchain, versioned_project, request)
+            for candidate in artifact_candidates(toolchain, prepared.project, request)
             if candidate.is_file()
         ),
         None,
@@ -338,10 +351,27 @@ def _compile_script(
     if executable is None:
         checked = "\n".join(
             f"  - {candidate}"
-            for candidate in artifact_candidates(toolchain, versioned_project, request)
+            for candidate in artifact_candidates(toolchain, prepared.project, request)
         )
         raise EvmError(f"build succeeded but executable was not found; checked:\n{checked}")
     return toolchain, executable
+
+
+def _validate_gobo_build_path(
+    toolchain: Toolchain,
+    build_directory: Path,
+    project_name: str,
+) -> None:
+    if sys.platform != "win32" or toolchain.adapter != "gobo":
+        return
+    generated_file = build_directory / ".gobo" / f"{project_name}{_GOBO_GENERATED_FILE_SAMPLE}"
+    if len(str(generated_file)) < _WINDOWS_MAX_PATH:
+        return
+    raise EvmError(
+        "Gobo build path is too long for Windows; set EVM_CACHE_DIR to a shorter path "
+        "for standalone files or move the project closer to the drive root: "
+        f"{generated_file}"
+    )
 
 
 def _prepare_script_dependencies(

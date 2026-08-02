@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import shutil
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from types import SimpleNamespace
 
 import pytest
@@ -12,9 +12,15 @@ from evm.dependencies import resolve_dependencies
 from evm.ecf import generate_ecf
 from evm.errors import EvmError
 from evm.manifest import load_manifest
-from evm.model import BuildRequest
+from evm.model import BuildRequest, Project
 from evm.project import create_project
-from evm.scripts import ScriptRunRequest, _compile_script, prepare_script, run_script
+from evm.scripts import (
+    ScriptRunRequest,
+    _compile_script,
+    _validate_gobo_build_path,
+    prepare_script,
+    run_script,
+)
 from evm.toolchains import Toolchain
 from evm.versioning import NumericVersion
 
@@ -41,12 +47,60 @@ def test_standalone_script_stages_only_explicit_sources(
     assert prepared.root.class_name == "HELLO"
     assert prepared.root.feature == "execute"
     assert prepared.source_project is None
+    assert len(prepared.cache_directory.name) == 32
+    fingerprint = (prepared.cache_directory / ".fingerprint").read_text().strip()
+    assert len(fingerprint) == 64
+    assert fingerprint.startswith(prepared.cache_directory.name)
     staged = sorted((prepared.cache_directory / "sources").rglob("*.e"))
     assert [path.name for path in staged] == ["hello.e", "helper.e"]
     assert staged[0].read_bytes().startswith(b"\nclass HELLO")
     assert not list(tmp_path.glob("*.ecf"))
     assert not (tmp_path / "Eiffel.toml").exists()
     assert not (tmp_path / "Eiffel.lock").exists()
+
+
+def test_script_rejects_cache_fingerprint_collision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "hello.e"
+    source.write_text("class HELLO end\n")
+    monkeypatch.setenv("EVM_CACHE_DIR", str(tmp_path / "cache"))
+    request = ScriptRunRequest(sources=(source,), standalone=True)
+    prepared = prepare_script(request)
+    (prepared.cache_directory / ".fingerprint").write_text("0" * 64)
+
+    with pytest.raises(EvmError, match="fingerprint collision"):
+        prepare_script(request)
+
+
+def test_script_build_layout_stays_below_windows_max_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "hello.e"
+    source.write_text("class HELLO end\n")
+    monkeypatch.setenv("EVM_CACHE_DIR", str(tmp_path / "cache"))
+    prepared = prepare_script(ScriptRunRequest(sources=(source,), standalone=True))
+    windows_cache = PureWindowsPath(
+        r"C:\Users\runneradmin\AppData\Local\Temp\pytest-of-runneradmin\pytest-0"
+    )
+    generated_file = (
+        windows_cache
+        / "test_standalone_script_runs_wi0"
+        / "cache"
+        / "scripts"
+        / prepared.cache_directory.name
+        / "build"
+        / "gobo"
+        / "26.03.05"
+        / "default"
+        / "dev"
+        / ".gobo"
+        / f"{prepared.project.name}_9999.c"
+    )
+
+    assert len(str(generated_file)) < 260
 
 
 def test_script_inherits_nearest_project_without_changing_ecf(
@@ -192,13 +246,21 @@ def test_compile_script_materializes_ecf_and_finds_executable(
     )
     executable = tmp_path / "application"
     executable.write_text("binary")
+    observed_projects: list[Project] = []
+
+    def prepare_build_directory(
+        _selected_toolchain: Toolchain,
+        project: Project,
+        _request: BuildRequest,
+    ) -> Path:
+        observed_projects.append(project)
+        return tmp_path / "build"
+
     monkeypatch.setattr("evm.scripts._prepare_script_dependencies", lambda *args: None)
     monkeypatch.setattr("evm.scripts.validate_configuration", lambda project: [])
     monkeypatch.setattr("evm.scripts.generate_ecf", lambda project, lock: b"<ecf/>")
     monkeypatch.setattr("evm.scripts.select_toolchain", lambda project, compiler: toolchain)
-    monkeypatch.setattr(
-        "evm.scripts.prepare_build_directory", lambda *args, **kwargs: tmp_path / "build"
-    )
+    monkeypatch.setattr("evm.scripts.prepare_build_directory", prepare_build_directory)
     monkeypatch.setattr("evm.scripts.compiler_command", lambda *args: ["gec"])
     monkeypatch.setattr("evm.scripts.run_compiler", lambda *args: None)
     monkeypatch.setattr("evm.scripts.artifact_candidates", lambda *args: (executable,))
@@ -207,7 +269,26 @@ def test_compile_script_materializes_ecf_and_finds_executable(
 
     assert selected == toolchain
     assert result == executable
+    assert observed_projects[0].build_root == prepared.cache_directory / "build"
     assert prepared.project.ecf_path.read_bytes() == b"<ecf/>"
+
+
+def test_gobo_rejects_excessive_windows_build_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    toolchain = Toolchain(
+        "gobo",
+        tmp_path / "gec.exe",
+        NumericVersion.parse("26.03.05"),
+        "explicit",
+        "--toolchain",
+    )
+    monkeypatch.setattr("evm.scripts.sys.platform", "win32")
+
+    _validate_gobo_build_path(toolchain, tmp_path / "short", "script_1234")
+    with pytest.raises(EvmError, match="EVM_CACHE_DIR"):
+        _validate_gobo_build_path(toolchain, Path("C:/") / ("x" * 240), "script_1234")
 
 
 def test_run_script_returns_application_exit_code(
