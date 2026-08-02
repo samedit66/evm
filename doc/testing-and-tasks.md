@@ -7,8 +7,8 @@ Build and execute the configured Eiffel test system:
 ```console
 $ evm test
 $ evm test --release
-$ evm test --compiler ise
-$ evm test --compiler gobo
+$ evm test --toolchain ise
+$ evm test --toolchain gobo
 ```
 
 Test target selection follows this order:
@@ -119,6 +119,17 @@ $ evm test --regenerate-ecf
 $ evm test --package parser
 $ evm test --json
 ```
+
+Run the exact project toolchain matrix or an explicit subset with:
+
+```console
+$ evm test --toolchain all
+$ evm test --toolchain gobo@26.06 --toolchain ise@25.12
+```
+
+Results are reported for every selected toolchain, and the overall command
+fails when any matrix entry fails. `--compiler` remains an alias for
+`--toolchain` for compatibility.
 
 ## One-command tasks
 

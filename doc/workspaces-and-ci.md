@@ -72,9 +72,9 @@ A typical sequence is:
 ```console
 $ evm install --locked
 $ evm discover --json
-$ evm check --compiler ise --json
-$ evm test --compiler ise --json
-$ evm build --compiler ise --release --json
+$ evm check --toolchain ise --json
+$ evm test --toolchain ise --json
+$ evm build --toolchain ise --release --json
 ```
 
 For deterministic CI:
@@ -90,6 +90,22 @@ Example environment selection:
 ```console
 $ EVM_TOOLCHAIN=gobo evm test --json
 ```
+
+When the project commits an exact `[toolchain]` matrix and its locked
+artifacts, CI can reproduce the compiler environment before restoring package
+dependencies:
+
+```console
+$ evm toolchain install --project --locked
+$ evm toolchain verify --project --json
+$ evm install --locked
+$ evm check --toolchain all --json
+$ evm test --toolchain all --json
+$ evm build --toolchain all --release --json
+```
+
+The toolchain store may be shared by projects or cached by CI. Package
+dependencies remain confined to the project or workspace `.evm/` directory.
 
 An offline verification step can ensure that a populated build does not access
 the network:

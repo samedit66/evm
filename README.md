@@ -4,7 +4,7 @@
 
 ### A project and dependency manager for Eiffel
 
-**Human-readable projects. Reproducible dependencies. Native Eiffel toolchains.**
+**Run a file. Build a project. Reproduce its dependencies and toolchains.**
 
 [![Python 3.14+](https://img.shields.io/badge/Python-3.14%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Language: Eiffel](https://img.shields.io/badge/language-Eiffel-6f42c1)](https://www.eiffel.org/)
@@ -12,12 +12,11 @@
 [![Gobo Eiffel](https://img.shields.io/badge/toolchain-Gobo%20Eiffel-8B5A2B)](https://www.gobosoft.com/)
 ![Status: early development](https://img.shields.io/badge/status-early%20development-E3A008)
 
-EVM provides one workflow for creating, building, testing, and sharing Eiffel
-projects while keeping ECF, EiffelStudio, `ec`, and `gec` first-class citizens.
+EVM brings source files, projects, dependencies, ECF, ISE Eiffel, and Gobo
+Eiffel into one workflow without replacing the native Eiffel ecosystem.
 
 [Quick start](#quick-start) ·
-[Installation](doc/installation.md) ·
-[Package management](doc/dependencies.md) ·
+[Documentation](doc/) ·
 [CLI reference](doc/cli-reference.md) ·
 [`SPEC.md`](SPEC.md)
 
@@ -28,10 +27,171 @@ projects while keeping ECF, EiffelStudio, `ec`, and `gec` first-class citizens.
 > the CLI and manifest format may evolve. [`SPEC.md`](SPEC.md) is the source of
 > truth for product requirements and behavior.
 
+## Installation
+
+EVM requires Python 3.14 or newer. Until a stable package is published, install
+the command directly from the repository with
+[`uv`](https://docs.astral.sh/uv/):
+
+```console
+git clone https://github.com/samedit66/evm.git
+cd evm
+uv tool install .
+evm --version
+```
+
+For development from a checkout:
+
+```console
+uv sync --all-groups
+uv run evm --help
+```
+
+See [Installation](doc/installation.md) for other environment details.
+
+## Quick start
+
+### Run a single Eiffel file
+
+Create `hello.e`:
+
+```eiffel
+class
+    HELLO
+
+create
+    make
+
+feature {NONE} -- Initialization
+
+    make
+        do
+            print ("Hello, World!%N")
+        end
+
+end
+```
+
+Run it directly:
+
+```console
+evm run hello.e
+```
+
+No project manifest or handwritten ECF is required. EVM selects a compatible
+installed toolchain, stages an internal ECF, builds the file, and runs it in an
+isolated cache.
+
+Choose a provider or exact version when needed:
+
+```console
+evm run --toolchain gobo hello.e
+evm run --toolchain gobo@26.06 hello.e
+```
+
+### Install an Eiffel toolchain
+
+EVM can use an existing ISE Eiffel or Gobo Eiffel installation. It can also
+install a verified distribution in its shared user store:
+
+```console
+evm toolchain list --available
+evm toolchain install gobo
+evm toolchain verify gobo
+```
+
+Use an exact selector such as `gobo@26.06` when the version matters. See
+[Toolchains](doc/toolchains.md) for linked installations, project matrices,
+locked installation, offline use, and environment setup.
+
+### Create a project
+
+Turn the same workflow into a reproducible application project:
+
+```console
+evm new hello
+cd hello
+evm run
+```
+
+The generated project includes a human-readable `Eiffel.toml`, an exact
+`Eiffel.lock`, a standard ECF, production sources, and a conventional test
+directory. Common operations stay short:
+
+```console
+evm check
+evm build --release
+evm test
+```
+
+### Add and use a dependency
+
+The following project uses the real
+[Eiffel JSON](https://github.com/eiffelhub/json) library. Create it and add the
+library from its `v0.11` Git tag:
+
+```console
+evm new json_demo
+cd json_demo
+evm add ejson \
+    --git https://github.com/eiffelhub/json.git \
+    --tag v0.11 \
+    --ecf library/json.ecf
+```
+
+Replace `src/application.e` with this single file:
+
+```eiffel
+class
+    APPLICATION
+
+create
+    make
+
+feature {NONE} -- Initialization
+
+    make
+        local
+            document: JSON_OBJECT
+        do
+            create document.make
+            document.put_string ("evm", "project")
+            document.put_string ("works", "status")
+            print (document.representation)
+            print ("%N")
+        end
+
+end
+```
+
+Run the application:
+
+```console
+evm run
+```
+
+It prints:
+
+```json
+{"project":"evm","status":"works"}
+```
+
+`evm add` records the declared source in `Eiffel.toml`, resolves the tag to
+immutable Git identities in `Eiffel.lock`, materializes the dependency below
+`.evm/`, and synchronizes the managed ECF. A fresh checkout can restore the
+same state with:
+
+```console
+evm install --locked
+```
+
+See [Package management](doc/dependencies.md) for IRON, Git, local-path, ISE,
+and Gobo dependencies, updates, offline operation, and graph inspection.
+
 ## Why EVM?
 
-ECF is an expressive description of an Eiffel system, but it is primarily a
-compiler configuration format. By itself, it does not record where every
+ECF is an expressive native description of an Eiffel system, but it is mainly
+a compiler configuration format. By itself, it does not record where every
 dependency comes from, which exact revisions produced a build, or how the full
 project state can be restored on another machine.
 
@@ -40,129 +200,25 @@ EVM adds that project-management layer:
 ```text
 Eiffel.toml          human-readable project intent
      +
-Eiffel.lock          exact, reproducible dependency graph
+Eiffel.lock          exact dependencies and locked toolchain artifacts
      ↓
 standard ECF         EiffelStudio, ISE Eiffel, and Gobo Eiffel
 ```
 
-EVM offers:
+The result is one CLI for everyday project operations, reproducible package
+state, deterministic ECF generation, optional managed toolchains, and safe
+adoption of existing Eiffel projects.
 
-- one CLI for creating, checking, building, running, and testing projects;
-- reproducible IRON, Git, local-path, ISE, and Gobo dependencies;
-- deterministic ECF generation without replacing the native format;
-- project-local dependency state below `.evm/`;
-- safe adoption of existing ECF projects;
-- portable project tasks and multi-package workspaces;
-- stable JSON output for CI.
-
-EVM does **not** implement an Eiffel compiler or ask users to stop using
-EiffelStudio, Gobo, ECF, or other existing Eiffel tools. It brings libraries
-and tools from different vendors together behind a consistent interface while
-keeping their native toolchains and formats accessible.
-
-## Quick start
-
-### Create and run an application
-
-```console
-$ evm new hello
-$ cd hello
-$ evm check --configuration-only
-$ evm build
-$ evm run
-```
-
-New projects use non-SCOOP concurrency by default. Pass `--scoop` when the
-project is intended to use SCOOP:
-
-```console
-$ evm new concurrent_service --scoop
-```
-
-Arguments after `--` are passed directly to the application:
-
-```console
-$ evm run -- --example-argument
-```
-
-Eiffel files can also be run directly without creating a project:
-
-```console
-$ evm run hello.e
-$ evm run hello.e helper.e -- input.txt
-```
-
-The first file supplies the root class. EVM stages only the listed files and
-keeps its generated ECF and build artifacts in a managed cache. If every file
-belongs to one EVM project, that project's manifest and lock file provide the
-dependency context; use `--standalone` to disable project discovery.
-
-### Create a library
-
-```console
-$ evm new shared --lib
-$ cd shared
-$ evm build
-```
-
-To initialize the current directory without overwriting existing files:
-
-```console
-$ evm init
-```
-
-If the directory already contains an ECF, migrate it instead:
-
-```console
-$ evm import project.ecf
-```
-
-This adds only `Eiffel.toml` and `Eiffel.lock`; the original ECF remains the
-native source of truth. See [Migrating existing projects](doc/migrating-existing-projects.md).
-
-### Add a dependency
-
-IRON is the default package source:
-
-```console
-$ evm add json@25.02
-```
-
-EVM also supports libraries distributed with Eiffel toolchains, Git
-repositories, and local projects:
-
-```console
-$ evm add time --source ise
-$ evm add gobo_xml --source gobo --library xml
-$ evm add shared --path ../shared
-$ evm add json_git \
-    --git https://github.com/eiffelhub/json.git \
-    --branch master \
-    --ecf library/json.ecf
-```
-
-`evm add` updates `Eiffel.toml`, resolves the complete graph, records exact
-identities in `Eiffel.lock`, installs packages below `.evm/`, and synchronizes
-the managed ECF.
-
-Restore an existing project from its lock file:
-
-```console
-$ evm install --locked
-```
-
-See [Package management](doc/dependencies.md) for sources, updates, offline
-operation, graph inspection, and reproducibility guarantees.
+EVM does **not** implement an Eiffel compiler or require users to stop using
+EiffelStudio, Gobo, ECF, `ec`, or `gec`. Native tools and formats remain
+accessible and first-class.
 
 ## Project layout
-
-A new project keeps human-authored configuration separate from reproducible
-and generated state:
 
 ```text
 hello/
 ├── Eiffel.toml          # project intent and direct dependencies
-├── Eiffel.lock          # exact resolved dependency graph
+├── Eiffel.lock          # exact resolved state
 ├── hello.ecf            # native Eiffel configuration
 ├── src/                 # production Eiffel sources
 ├── tests/               # test Eiffel sources
@@ -171,54 +227,68 @@ hello/
 ```
 
 Commit `Eiffel.toml`, `Eiffel.lock`, and the managed ECF. Ignore `.evm/` and
-`build/`; EVM can reconstruct them.
+`build/`; EVM reconstructs them from committed state.
+
+Already have an ECF project? Adopt EVM without rewriting it:
+
+```console
+evm import project.ecf
+```
+
+See [Migrating existing projects](doc/migrating-existing-projects.md) for the
+safe legacy workflow.
+
+## More capabilities
+
+- ISE Eiffel and Gobo Eiffel adapters with deterministic selection;
+- managed, linked, exact, and project-matrix toolchains;
+- AutoTest, `getest`, conventional test targets, filters, and CI output;
+- portable project tasks with explicit opt-in for shell steps;
+- multi-package workspaces with dependency-order execution;
+- offline dependency and toolchain restoration;
+- deterministic `package.iron` import and export;
+- stable JSON output for automation.
 
 ## Examples
 
-- [`hello_time`](examples/hello_time/) uses a library from the Gobo
-  distribution and compiles the same project with Gobo Eiffel and ISE
-  EiffelStudio.
-- [`json`](examples/json/) resolves a pinned GitHub library, creates a JSON
-  object through its API, and prints the serialized value.
-- [`calculator_autotest`](examples/calculator_autotest/) exercises a stateless
-  calculator through ISE EiffelStudio's `EQA_TEST_SET` framework and EVM's
-  generated AutoTest console runner.
+- [`hello_time`](examples/hello_time/) uses a Gobo distribution library with
+  both Gobo Eiffel and ISE EiffelStudio.
+- [`json`](examples/json/) resolves the Eiffel JSON library from Git and calls
+  it from a real application.
+- [`calculator_autotest`](examples/calculator_autotest/) runs an
+  `EQA_TEST_SET` suite through EVM's generated AutoTest console runner.
 
 ## Documentation
 
-Until a separate documentation website is available, the complete user guide
-lives in [`doc/`](doc/).
-
 | Guide | Contents |
 |---|---|
-| [Installation](doc/installation.md) | Requirements, installation, and environment diagnosis |
-| [Projects and manifests](doc/projects.md) | Project layout, `Eiffel.toml`, targets, build modes, and daily workflow |
-| [Package management](doc/dependencies.md) | Dependency sources, locking, installation, updates, graph inspection, and offline mode |
-| [Toolchains](doc/toolchains.md) | ISE and Gobo discovery, selection, capabilities, and build output |
-| [ECF interoperability](doc/ecf.md) | Managed ECF, overlays, legacy mode, and importing existing projects |
+| [Installation](doc/installation.md) | Installation and environment diagnosis |
+| [Projects and manifests](doc/projects.md) | Project layout, targets, build modes, and daily workflow |
+| [Manifest reference](doc/manifest-reference.md) | `Eiffel.toml` sections, fields, and inferred defaults |
+| [Package management](doc/dependencies.md) | Sources, locking, updates, offline use, and graph inspection |
+| [Toolchains](doc/toolchains.md) | Discovery, installation, selection, matrices, and capabilities |
 | [Migrating existing projects](doc/migrating-existing-projects.md) | Adopt EVM without replacing an existing ECF |
-| [Testing and tasks](doc/testing-and-tasks.md) | Test target selection, filters, and manifest-defined workflows |
-| [Workspaces and CI](doc/workspaces-and-ci.md) | Multi-package repositories, package selection, JSON output, and reproducible CI |
+| [Testing and tasks](doc/testing-and-tasks.md) | Test runners, filters, diagnostics, and workflows |
+| [Workspaces and CI](doc/workspaces-and-ci.md) | Multi-package repositories and reproducible automation |
 | [CLI reference](doc/cli-reference.md) | Every public command and option |
-| [Development](doc/development.md) | Local setup, checks, tests, and contribution conventions |
 
-Every command also provides built-in help:
+Every command also includes built-in help:
 
 ```console
-$ evm --help
-$ evm add --help
-$ evm build --help
+evm --help
+evm add --help
+evm toolchain --help
 ```
 
 ## Project status
 
-The current implementation covers normalized manifests, managed ECF
-generation, ISE and Gobo compiler adapters, reproducible dependency locking,
-project-local dependency materialization, legacy ECF compatibility, tests,
-project workflows, and multi-package workspaces.
+The current implementation covers managed and legacy ECF projects, ISE and
+Gobo adapters, dependency resolution and locking, managed and linked
+toolchains, project compilation matrices, testing, tasks, IRON interoperability,
+and multi-package workspaces.
 
-For normative behavior, file formats, design boundaries, and acceptance
-criteria, see [`SPEC.md`](SPEC.md).
+For normative behavior, design boundaries, and acceptance criteria, see
+[`SPEC.md`](SPEC.md).
 
 ## License
 

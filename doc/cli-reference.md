@@ -8,7 +8,10 @@ new      init
 add      remove   update   install   deps
 build    run      test     check     clean
 discover explain  import   task
+toolchain
 ```
+
+The less frequently used IRON integration is available under `evm iron`.
 
 Use `evm COMMAND --help` for the help bundled with the installed version.
 
@@ -62,7 +65,9 @@ evm check [OPTIONS]
 Options:
   --configuration-only    Do not invoke an Eiffel compiler.
   --release               Check the release mode.
-  --compiler TEXT         Compiler adapter ID: ise or gobo.
+  --toolchain, --compiler TEXT
+                          Toolchain selector; repeatable. Accepts ise, gobo,
+                          an exact selector such as gobo@26.06, or all.
   --target TEXT           Target name; defaults to project.default-target.
   --regenerate-ecf        Explicitly overwrite managed ECF.
   --package TEXT          Limit a workspace command to one package.
@@ -79,7 +84,9 @@ evm build [OPTIONS]
 
 Options:
   --release               Build in release mode.
-  --compiler TEXT         Compiler adapter ID: ise or gobo.
+  --toolchain, --compiler TEXT
+                          Toolchain selector; repeatable. Accepts ise, gobo,
+                          an exact selector such as gobo@26.06, or all.
   --target TEXT           Target name; defaults to project.default-target.
   --offline               Forbid network access.
   --regenerate-ecf        Explicitly overwrite managed ECF.
@@ -98,7 +105,9 @@ evm run [OPTIONS] [FILES...] [-- ARGS...]
 
 Options:
   --release               Build and run in release mode.
-  --compiler TEXT         Compiler adapter ID: ise or gobo.
+  --toolchain, --compiler TEXT
+                          Toolchain selector: ise, gobo, or an exact version
+                          such as gobo@26.06.
   --target TEXT           Target name; defaults to project.default-target.
   --offline               Forbid network access.
   --regenerate-ecf        Explicitly overwrite managed ECF.
@@ -120,7 +129,7 @@ File examples:
 ```console
 $ evm run hello.e
 $ evm run hello.e helper.e -- input.txt --verbose
-$ evm run --standalone --compiler gobo hello.e
+$ evm run --standalone --toolchain gobo hello.e
 ```
 
 The first file supplies the root class and the remaining files supply
@@ -152,7 +161,9 @@ evm test [OPTIONS]
 
 Options:
   --release               Build tests in release mode.
-  --compiler TEXT         Compiler adapter ID: ise or gobo.
+  --toolchain, --compiler TEXT
+                          Toolchain selector; repeatable. Accepts ise, gobo,
+                          an exact selector such as gobo@26.06, or all.
   --class TEXT            Run one supported test class.
   --feature TEXT          Run one supported test feature.
   --offline               Forbid network access.
@@ -187,7 +198,9 @@ Options:
   --targets               List effective targets.
   --target TEXT           Target name; defaults to project.default-target.
   --release               Explain release mode.
-  --compiler TEXT         Compiler adapter ID: ise or gobo.
+  --toolchain, --compiler TEXT
+                          Toolchain selector: ise, gobo, or an exact version
+                          such as gobo@26.06.
   --json                  Emit stable JSON.
   --ecf-diff              Compare the ECF with the manifest.
   --help
@@ -195,6 +208,11 @@ Options:
 
 `--json` and `--ecf-diff` select different output modes and should not be
 combined.
+
+`--toolchain` is the canonical option name throughout EVM. `--compiler` is a
+compatibility alias and accepts the same selectors. For `check`, `build`, and
+`test`, repeat the option to run a finite compilation matrix, or use `all` to
+run the matrix declared by the project. See [Toolchains](toolchains.md).
 
 ## `evm import`
 
@@ -214,6 +232,104 @@ The command atomically creates only `Eiffel.toml` and `Eiffel.lock`. The
 original ECF remains authoritative and is neither changed nor copied.
 Importing an IRON package with multiple ECF entries requires `--project`.
 IRON `setup` declarations are reported but never executed.
+
+## `evm toolchain`
+
+Install and manage user-level Eiffel toolchains. Managed distributions live in
+the shared user store rather than in the project. Linked registrations refer to
+an existing installation without copying it.
+
+### `evm toolchain list`
+
+```text
+evm toolchain list [OPTIONS] [ise|gobo]
+
+Options:
+  --available    Show official releases available for download.
+  --json         Emit stable JSON for CI.
+  --help
+```
+
+Without `--available`, list managed and linked installations. The optional
+provider limits either view to ISE or Gobo.
+
+### `evm toolchain install`
+
+```text
+evm toolchain install [OPTIONS] [SELECTORS]...
+
+Options:
+  --project      Install the project toolchain matrix.
+  --locked       Require exact artifacts from Eiffel.lock.
+  --offline      Use only the verified download cache.
+  --help
+```
+
+Pass one or more exact selectors directly, or use `--project`. `--locked`
+requires `--project` and installs the platform artifacts recorded in the lock
+file. Reinstalling an already verified distribution is idempotent.
+
+### `evm toolchain link`
+
+```text
+evm toolchain link PATH
+```
+
+Probe and register an existing EiffelStudio or Gobo installation without
+copying it into the EVM store.
+
+### `evm toolchain use`
+
+```text
+evm toolchain use [OPTIONS] SELECTORS...
+
+Options:
+  --install      Install the resolved releases after updating the project.
+  --help
+```
+
+Resolve selectors such as `gobo@latest` to exact versions and transactionally
+write `[toolchain]` plus the corresponding artifacts in `Eiffel.lock`. The
+first selector becomes `toolchain.default`; all selectors form the matrix.
+
+### `evm toolchain env`
+
+```text
+evm toolchain env [OPTIONS] [SELECTOR]
+
+Options:
+  --shell [bash|zsh|sh|powershell|dotenv]    [default: sh]
+  --help
+```
+
+Print the environment changes for the selected installation. The command does
+not modify the shell or project.
+
+### `evm toolchain verify`
+
+```text
+evm toolchain verify [OPTIONS] [SELECTOR]
+
+Options:
+  --project      Verify the project matrix.
+  --json         Emit stable JSON for CI.
+  --help
+```
+
+Verify compiler executables and their reported versions.
+
+### `evm toolchain remove`
+
+```text
+evm toolchain remove [OPTIONS] SELECTOR
+
+Options:
+  --force        Remove a toolchain selected by the current project.
+  --help
+```
+
+For a linked installation, only the registration is removed. The external
+directory is never deleted.
 
 ## `evm iron export`
 
@@ -363,3 +479,10 @@ are mutually exclusive.
 | `explain` | Effective configuration or an ECF difference is displayed |
 | `import` | An initial project is created from an existing ECF |
 | `task` | A manifest-defined workflow is executed |
+| `toolchain list` | Installed or available toolchains are displayed |
+| `toolchain install` | Verified toolchains are installed in the user store |
+| `toolchain link` | An existing installation is registered without copying |
+| `toolchain use` | The project toolchain policy and lock are updated |
+| `toolchain env` | Shell environment changes are printed without mutation |
+| `toolchain verify` | Registered compiler identities are verified |
+| `toolchain remove` | A managed installation or linked registration is removed |

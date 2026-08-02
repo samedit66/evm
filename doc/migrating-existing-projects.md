@@ -69,7 +69,7 @@ unconfigured instead of guessing.
 Run the migrated suite with:
 
 ```console
-$ evm test --compiler ise
+$ evm test --toolchain ise
 ```
 
 The default result correlates failed AutoTest cases with the migrated source

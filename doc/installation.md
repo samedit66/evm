@@ -1,7 +1,8 @@
 # Installation
 
 EVM requires Python 3.14 or newer. Compiler-backed commands additionally need
-at least one supported Eiffel toolchain:
+at least one supported Eiffel toolchain, either installed through EVM or
+provided by the environment:
 
 - ISE Eiffel/EiffelStudio with `ec`; or
 - Gobo Eiffel with `gec`.
@@ -62,3 +63,36 @@ $ evm discover --json
 ```
 
 See [Toolchains](toolchains.md) for compiler selection and capability handling.
+
+## Install an Eiffel toolchain with EVM
+
+List official distributions available for the current platform:
+
+```console
+$ evm toolchain list --available
+```
+
+Install and verify an exact release:
+
+```console
+$ evm toolchain install gobo@26.06
+$ evm toolchain verify gobo@26.06
+```
+
+The verified distribution is stored once in EVM's user-level store. Override
+that location with `EVM_TOOLCHAIN_HOME` when required by CI or system policy.
+
+To register an existing installation without copying it:
+
+```console
+$ evm toolchain link /opt/EiffelStudio-25.12
+$ evm toolchain list
+```
+
+For a project with an exact toolchain matrix, install the artifacts recorded in
+its lock file:
+
+```console
+$ evm toolchain install --project --locked
+$ evm toolchain verify --project
+```

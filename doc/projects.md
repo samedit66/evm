@@ -49,7 +49,7 @@ hello/
 | Path | Responsibility | Commit? |
 |---|---|:---:|
 | `Eiffel.toml` | Project intent, targets, direct dependencies, workflows | Yes |
-| `Eiffel.lock` | Exact resolved dependency graph | Yes |
+| `Eiffel.lock` | Exact dependency graph and locked toolchain artifacts | Yes |
 | `<project>.ecf` | Native Eiffel configuration | Yes |
 | `.evm/` | Installed dependencies, source cache, locks, temporary state | No |
 | `build/` | Compiler products | No |
@@ -72,8 +72,6 @@ name = "hello"
 version = "0.1.0"
 type = "application"
 uuid = "2e17c4af-2d3f-4ca5-95d0-e69be3cd02f1"
-ecf = "hello.ecf"
-ecf-managed = true
 
 [root]
 class = "APPLICATION"
@@ -87,6 +85,38 @@ The manifest describes intent rather than machine-specific state. EVM infers
 the default target, development and release modes, compiler selection, local
 package layout, and a conventional test target when explicit configuration is
 unnecessary.
+
+Add `project.ecf`, `project.ecf-managed`, or `project.default-target` only when
+the inferred managed configuration is not sufficient. See the
+[Manifest reference](manifest-reference.md) for every supported section.
+
+## Toolchain policy
+
+A portable project can omit all toolchain configuration. EVM then selects a
+compatible installed provider deterministically. Projects that need explicit
+compatibility and capabilities can declare them separately:
+
+```toml
+[compatibility]
+compilers = ["ise >=25.12,<26", "gobo =26.06.30"]
+
+[requires]
+void-safety = "all"
+concurrency = "none"
+```
+
+Fix the default and compilation matrix through the CLI:
+
+```console
+$ evm toolchain use gobo@26.06 ise@25.12
+$ evm toolchain install --project --locked
+$ evm check --toolchain all
+```
+
+Exact platform artifacts are recorded in `Eiffel.lock`; compiler distributions
+are stored once in the EVM user store, not below the project `.evm/`. See
+[Toolchains](toolchains.md) for selection order, managed installations, linked
+installations, and matrices.
 
 ## IRON package metadata
 
@@ -137,7 +167,7 @@ Inspect the effective configuration:
 ```console
 $ evm explain
 $ evm explain --target server
-$ evm explain --release --compiler gobo
+$ evm explain --release --toolchain gobo
 $ evm explain --json
 ```
 
