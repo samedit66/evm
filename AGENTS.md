@@ -12,7 +12,7 @@ duplicate the specification in code documentation.
 
 ## Code
 
-- Use Python 3.14 and add type annotations to all new production code.
+- Use Python 3.11 and add type annotations to all new production code.
 - Prefer the simplest solution that satisfies current requirements.
 - Do not introduce frameworks, extension points, abstraction layers, or
   generalized infrastructure solely for possible future use.

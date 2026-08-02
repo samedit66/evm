@@ -15,6 +15,15 @@ from evm.toolchain_store import save_managed_installation
 from evm.toolchain_types import InstallationKind, ToolchainInstallation, current_toolchain_platform
 
 
+@pytest.fixture(autouse=True)
+def isolate_toolchain_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def toolchain_root(environment: dict[str, str]) -> Path:
+        configured = environment.get("EVM_TOOLCHAIN_HOME")
+        return Path(configured) if configured else tmp_path / "toolchains"
+
+    monkeypatch.setattr("evm.discovery.user_toolchain_root", toolchain_root)
+
+
 def _executable(directory: Path, name: str, output: str, exit_code: int = 0) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
     executable = directory / name

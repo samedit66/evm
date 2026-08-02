@@ -1,6 +1,6 @@
 # Development
 
-EVM targets Python 3.14. New production code must include type annotations, and
+EVM targets Python 3.11. New production code must include type annotations, and
 every behavior change requires corresponding tests.
 
 ## Set up the repository

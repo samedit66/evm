@@ -1,6 +1,6 @@
 # Installation
 
-EVM requires Python 3.14 or newer. Compiler-backed commands additionally need
+EVM requires Python 3.11 or newer. Compiler-backed commands additionally need
 at least one supported Eiffel toolchain, either installed through EVM or
 provided by the environment:
 
@@ -30,7 +30,7 @@ $ uv run evm --help
 It can also be installed into a Python environment:
 
 ```console
-$ python3.14 -m pip install .
+$ python3.11 -m pip install .
 $ evm --version
 ```
 

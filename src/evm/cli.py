@@ -9,7 +9,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from functools import wraps
 from pathlib import Path
-from typing import Any
+from typing import Any, ParamSpec, TypeVar
 
 import click
 
@@ -143,7 +143,11 @@ class _CompilationMatrixOptions:
     request_factory: Callable[[Project, str | None], BuildRequest]
 
 
-def command_errors[**P, R](function: Callable[P, R]) -> Callable[P, R]:
+P = ParamSpec("P")
+R = TypeVar("R")
+
+
+def command_errors(function: Callable[P, R]) -> Callable[P, R]:
     """Render domain errors consistently without Python tracebacks."""
 
     @wraps(function)

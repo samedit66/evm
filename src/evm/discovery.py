@@ -336,7 +336,7 @@ def _xcrun_candidates() -> list[_Candidate]:
             text=True,
             timeout=_VERSION_TIMEOUT_SECONDS,
         )
-    except OSError, subprocess.TimeoutExpired:
+    except (OSError, subprocess.TimeoutExpired):
         return []
     path = Path(completed.stdout.strip())
     if completed.returncode != 0 or not path.is_file():
@@ -372,7 +372,7 @@ def _visual_studio_candidates(environment: Mapping[str, str]) -> list[_Candidate
             text=True,
             timeout=_VERSION_TIMEOUT_SECONDS,
         )
-    except OSError, subprocess.TimeoutExpired:
+    except (OSError, subprocess.TimeoutExpired):
         return []
     if completed.returncode != 0 or not completed.stdout.strip():
         return []

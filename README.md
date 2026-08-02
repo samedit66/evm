@@ -6,7 +6,7 @@
 
 **Run a file. Build a project. Reproduce its dependencies and toolchains.**
 
-[![Python 3.14+](https://img.shields.io/badge/Python-3.14%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Language: Eiffel](https://img.shields.io/badge/language-Eiffel-6f42c1)](https://www.eiffel.org/)
 [![ISE Eiffel](https://img.shields.io/badge/toolchain-ISE%20Eiffel-17365D)](https://www.eiffel.com/)
 [![Gobo Eiffel](https://img.shields.io/badge/toolchain-Gobo%20Eiffel-8B5A2B)](https://www.gobosoft.com/)
@@ -29,7 +29,7 @@ Eiffel into one workflow without replacing the native Eiffel ecosystem.
 
 ## Installation
 
-EVM requires Python 3.14 or newer. Until a stable package is published, install
+EVM requires Python 3.11 or newer. Until a stable package is published, install
 the command directly from the repository with
 [`uv`](https://docs.astral.sh/uv/):
 
