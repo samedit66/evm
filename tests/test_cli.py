@@ -9,14 +9,14 @@ from click.testing import CliRunner
 from lxml import etree
 
 from evm.cli import main
-from evm.documentation import DocumentationResult
-from evm.ecf import ECF_NAMESPACE
 from evm.errors import EvmError
-from evm.linting import LintResult
+from evm.formats.ecf import ECF_NAMESPACE
 from evm.lockfile import load_lock
 from evm.manifest import load_manifest
-from evm.testing import TestDiagnostic as EvmTestDiagnostic
-from evm.testing import TestResult as EvmTestResult
+from evm.operations.documentation import DocumentationResult
+from evm.operations.linting import LintResult
+from evm.operations.testing import TestDiagnostic as EvmTestDiagnostic
+from evm.operations.testing import TestResult as EvmTestResult
 
 
 def test_new_creates_application_and_stable_ecf(tmp_path: Path, monkeypatch) -> None:

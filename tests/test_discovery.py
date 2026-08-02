@@ -11,8 +11,8 @@ from click.testing import CliRunner
 
 from evm.cli import main
 from evm.discovery import discover_environment, discovery_lines
-from evm.toolchain_store import save_managed_installation
-from evm.toolchain_types import InstallationKind, ToolchainInstallation, current_toolchain_platform
+from evm.toolchain.store import save_managed_installation
+from evm.toolchain.types import InstallationKind, ToolchainInstallation, current_toolchain_platform
 
 
 @pytest.fixture(autouse=True)

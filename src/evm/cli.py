@@ -13,22 +13,25 @@ from typing import Any
 import click
 
 from evm.cli_support import command_errors
-from evm.dependencies import clean_unused, dependency_tree_lines
-from evm.dependency_commands import (
+from evm.dependencies.commands import (
     add_dependency,
     install_project,
     remove_dependency,
     update_dependencies,
 )
+from evm.dependencies.resolution import clean_unused, dependency_tree_lines
 from evm.discovery import discover_environment, discovery_lines
-from evm.documentation import DocumentationRequest, document_project
-from evm.ecf import semantic_diff
 from evm.errors import EvmError
 from evm.filesystem import atomic_write
-from evm.iron import IRON_PACKAGE_NAME, serialize_iron_package
-from evm.linting import LintRequest, lint_project
+from evm.formats.ecf import semantic_diff
+from evm.formats.iron import IRON_PACKAGE_NAME, serialize_iron_package
 from evm.lockfile import LOCK_NAME, load_lock
 from evm.model import BuildRequest, Dependency, Project
+from evm.operations.documentation import DocumentationRequest, document_project
+from evm.operations.linting import LintRequest, lint_project
+from evm.operations.scripts import ScriptRunRequest, run_script
+from evm.operations.tasks import run_task
+from evm.operations.testing import TestDiagnostic, TestRequest, TestResult, test_project
 from evm.project.creation import ProjectCreationRequest, create_project
 from evm.project.templates import APPLICATION_TEMPLATE, LIBRARY_TEMPLATE
 from evm.project.workflow import (
@@ -41,12 +44,9 @@ from evm.project.workflow import (
     prepare_project,
     run_project,
 )
-from evm.scripts import ScriptRunRequest, run_script
-from evm.tasks import run_task
-from evm.testing import TestDiagnostic, TestRequest, TestResult, test_project
-from evm.toolchain_cli import toolchain_group
-from evm.toolchain_store import list_installations
-from evm.toolchain_types import ToolchainSelector
+from evm.toolchain.cli import toolchain_group
+from evm.toolchain.store import list_installations
+from evm.toolchain.types import ToolchainSelector
 from evm.workspace import ProjectContext, load_project_context, workspace_tree_lines
 
 

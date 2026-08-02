@@ -8,9 +8,9 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-from evm.ecf import generate_ecf
 from evm.errors import EvmError
 from evm.filesystem import atomic_write
+from evm.formats.ecf import generate_ecf
 from evm.lockfile import empty_lock, serialize_lock
 from evm.manifest import load_manifest, parse_manifest
 from evm.model import Project, Root

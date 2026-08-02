@@ -14,7 +14,7 @@ from typing import Any
 import tomlkit
 from tomlkit.exceptions import TOMLKitError
 
-from evm.dependency_validation import ensure_dependency_is_not_implicit_runtime
+from evm.dependencies.validation import ensure_dependency_is_not_implicit_runtime
 from evm.errors import EvmError
 from evm.model import (
     CompilerRequirement,
@@ -30,7 +30,7 @@ from evm.model import (
     TestConfiguration,
     ToolchainConfiguration,
 )
-from evm.toolchain_types import ToolchainSelector
+from evm.toolchain.types import ToolchainSelector
 from evm.versioning import NumericVersion, satisfies, validate_constraint
 
 MANIFEST_NAME = "Eiffel.toml"

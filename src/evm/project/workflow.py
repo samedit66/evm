@@ -14,17 +14,16 @@ from typing import Any
 import tomlkit
 from lxml import etree
 
-from evm.compiler_adapters import compiler_adapter
-from evm.dependencies import install_dependencies
-from evm.ecf import (
+from evm.dependencies.resolution import install_dependencies
+from evm.errors import EvmError
+from evm.filesystem import atomic_write_many
+from evm.formats.ecf import (
     ensure_managed_ecf,
     parse_ecf,
     prepare_legacy_ecf,
     validate_ecf,
 )
-from evm.errors import EvmError
-from evm.filesystem import atomic_write_many
-from evm.iron import (
+from evm.formats.iron import (
     IRON_PACKAGE_NAME,
     iron_package_diagnostics,
     load_iron_package,
@@ -33,7 +32,8 @@ from evm.iron import (
 from evm.lockfile import LOCK_NAME, empty_lock, load_lock, serialize_lock
 from evm.manifest import parse_manifest
 from evm.model import BuildRequest, PackageMetadata, Project, Root, Target, TestConfiguration
-from evm.toolchains import (
+from evm.toolchain.compilers import compiler_adapter
+from evm.toolchain.selection import (
     Toolchain,
     artifact_candidates,
     compiler_command,

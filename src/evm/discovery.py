@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from evm.toolchain_store import list_installations, user_toolchain_root
+from evm.toolchain.store import list_installations, user_toolchain_root
 
 _DISCOVERY_SCHEMA_VERSION = 1
 _VERSION_TIMEOUT_SECONDS = 5
