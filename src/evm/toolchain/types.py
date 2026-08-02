@@ -10,9 +10,9 @@ from enum import StrEnum
 from pathlib import Path
 
 from evm.errors import EvmError
+from evm.toolchain.compilers import compiler_adapter_metadata, compiler_adapter_names
 
-KNOWN_PROVIDERS = ("ise", "gobo")
-_SELECTOR_RE = re.compile(r"^(ise|gobo)(?:@([A-Za-z0-9][A-Za-z0-9._-]*))?$")
+_SELECTOR_RE = re.compile(r"^([a-z][a-z0-9-]*)(?:@([A-Za-z0-9][A-Za-z0-9._-]*))?$")
 
 
 class InstallationKind(StrEnum):
@@ -32,9 +32,11 @@ class ToolchainSelector:
     @classmethod
     def parse(cls, value: str) -> ToolchainSelector:
         match = _SELECTOR_RE.fullmatch(value.strip().lower())
-        if match is None:
+        known = compiler_adapter_names()
+        if match is None or match.group(1) not in known:
+            known_text = ", ".join(known)
             raise EvmError(
-                f"invalid toolchain selector {value!r}; known adapters: ise, gobo; "
+                f"invalid toolchain selector {value!r}; known adapters: {known_text}; "
                 "expected provider or provider@version"
             )
         return cls(match.group(1), match.group(2))
@@ -136,7 +138,7 @@ def current_toolchain_platform(
 
 def executable_name(provider: str) -> str:
     suffix = ".exe" if os.name == "nt" else ""
-    return ("ec" if provider == "ise" else "gec") + suffix
+    return compiler_adapter_metadata(provider).executable + suffix
 
 
 def _normalized_architecture(machine: str) -> str:

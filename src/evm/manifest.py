@@ -30,6 +30,7 @@ from evm.model import (
     TestConfiguration,
     ToolchainConfiguration,
 )
+from evm.toolchain.compilers import compiler_adapter_names
 from evm.toolchain.types import ToolchainSelector
 from evm.versioning import NumericVersion, satisfies, validate_constraint
 
@@ -515,8 +516,11 @@ def _parse_compilers(value: Any) -> tuple[CompilerRequirement, ...]:
     for entry in entries:
         parts = entry.split(maxsplit=1)
         adapter = parts[0]
-        if adapter not in {"ise", "gobo"}:
-            raise EvmError(f"unknown compiler adapter {adapter!r}; known adapters: ise, gobo")
+        known = compiler_adapter_names()
+        if adapter not in known:
+            raise EvmError(
+                f"unknown compiler adapter {adapter!r}; known adapters: {', '.join(known)}"
+            )
         if adapter in seen:
             raise EvmError(f"duplicate compiler adapter in compatibility.compilers: {adapter}")
         constraint = parts[1] if len(parts) == 2 else None
@@ -663,9 +667,12 @@ def _parse_compiler_arguments(value: Any) -> dict[str, tuple[str, ...]]:
         return {}
     if not isinstance(value, Mapping):
         raise EvmError("compiler must be a table")
-    unknown = sorted(set(value) - {"ise", "gobo"})
+    known = compiler_adapter_names()
+    unknown = sorted(set(value) - set(known))
     if unknown:
-        raise EvmError(f"unknown compiler adapter {unknown[0]!r}; known adapters: ise, gobo")
+        raise EvmError(
+            f"unknown compiler adapter {unknown[0]!r}; known adapters: {', '.join(known)}"
+        )
     result: dict[str, tuple[str, ...]] = {}
     for adapter, table in value.items():
         if not isinstance(table, Mapping):

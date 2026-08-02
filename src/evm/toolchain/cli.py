@@ -17,6 +17,7 @@ from evm.toolchain.commands import (
     project_toolchain_selectors,
     record_installed_toolchains,
 )
+from evm.toolchain.compilers import compiler_adapter_names
 from evm.toolchain.installation import (
     available_artifacts,
     install_locked_toolchain,
@@ -46,7 +47,7 @@ def toolchain_group() -> None:
 
 
 @toolchain_group.command("list")
-@click.argument("provider", required=False, type=click.Choice(["ise", "gobo"]))
+@click.argument("provider", required=False, type=click.Choice(compiler_adapter_names()))
 @click.option("--available", is_flag=True, help="Show releases available for download.")
 @click.option("--json", "output_json", is_flag=True, help="Emit stable JSON for CI.")
 @command_errors

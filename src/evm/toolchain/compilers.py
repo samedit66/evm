@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import platform
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
@@ -176,6 +177,23 @@ _COMPILER_ADAPTERS: dict[str, CompilerAdapter] = {
 }
 
 
+@dataclass(frozen=True)
+class CompilerAdapterMetadata:
+    """Stable identity and discovery details for a compiler adapter."""
+
+    name: str
+    display_name: str
+    executable: str
+    version_arguments: tuple[str, ...]
+    automatic: bool = False
+
+
+_ADAPTER_METADATA = {
+    "ise": CompilerAdapterMetadata("ise", "ISE EiffelStudio", "ec", ("-version",), True),
+    "gobo": CompilerAdapterMetadata("gobo", "Gobo Eiffel", "gec", ("--version",), True),
+}
+
+
 def compiler_adapter(name: str) -> CompilerAdapter:
     """Return the registered adapter for a stable toolchain code name."""
     try:
@@ -188,6 +206,20 @@ def compiler_adapter(name: str) -> CompilerAdapter:
 def compiler_adapter_names() -> tuple[str, ...]:
     """Return compiler code names in automatic-selection priority order."""
     return tuple(_COMPILER_ADAPTERS)
+
+
+def automatic_compiler_adapter_names() -> tuple[str, ...]:
+    """Return adapters eligible for implicit toolchain selection."""
+    return tuple(name for name, metadata in _ADAPTER_METADATA.items() if metadata.automatic)
+
+
+def compiler_adapter_metadata(name: str) -> CompilerAdapterMetadata:
+    """Return discovery metadata for a registered compiler adapter."""
+    try:
+        return _ADAPTER_METADATA[name]
+    except KeyError as error:
+        known = ", ".join(_ADAPTER_METADATA)
+        raise EvmError(f"unknown compiler adapter {name!r}; known adapters: {known}") from error
 
 
 def build_directory(

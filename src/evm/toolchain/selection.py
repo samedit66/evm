@@ -13,8 +13,10 @@ from pathlib import Path
 from evm.errors import EvmError
 from evm.model import BuildRequest, CompilerRequirement, Project
 from evm.toolchain.compilers import (
+    automatic_compiler_adapter_names,
     build_directory,
     compiler_adapter,
+    compiler_adapter_metadata,
     compiler_adapter_names,
 )
 from evm.toolchain.store import list_installations, toolchain_environment
@@ -26,7 +28,6 @@ from evm.toolchain.types import (
 from evm.versioning import NumericVersion, satisfies
 
 KNOWN_ADAPTERS = compiler_adapter_names()
-_ADAPTER_EXECUTABLES = {"ise": "ec", "gobo": "gec"}
 _VERSION_TIMEOUT_SECONDS = 15
 _NUMERIC_VERSION_RE = re.compile(r"\d+(?:\.\d+)+")
 
@@ -47,7 +48,7 @@ class Toolchain:
 
     @property
     def display_name(self) -> str:
-        label = "ISE EiffelStudio" if self.adapter == "ise" else "Gobo Eiffel"
+        label = compiler_adapter_metadata(self.adapter).display_name
         return f"{label} {self.version}"
 
 
@@ -79,11 +80,12 @@ def detect_all() -> dict[str, Detection]:
 
 def detect(adapter: str) -> Detection:
     _validate_adapter(adapter)
-    executable_name = _ADAPTER_EXECUTABLES[adapter]
+    metadata = compiler_adapter_metadata(adapter)
+    executable_name = metadata.executable
     found = shutil.which(executable_name)
     if found is None:
         return Detection(None, None, f"{executable_name} was not found in PATH")
-    command = [found, "-version"] if adapter == "ise" else [found, "--version"]
+    command = [found, *metadata.version_arguments]
     try:
         completed = subprocess.run(
             command,
@@ -159,7 +161,9 @@ def _selection_policy(
             "automatic",
             "first compatible adapter in compatibility.compilers",
         )
-    candidates = tuple(CompilerRequirement(name, None) for name in KNOWN_ADAPTERS)
+    candidates = tuple(
+        CompilerRequirement(name, None) for name in automatic_compiler_adapter_names()
+    )
     return _SelectionPolicy(
         candidates,
         "automatic",
@@ -274,7 +278,8 @@ def artifact_candidates(
 
 def _validate_adapter(adapter: str) -> None:
     if adapter not in KNOWN_ADAPTERS:
-        raise EvmError(f"unknown compiler adapter {adapter!r}; known adapters: ise, gobo")
+        known = ", ".join(KNOWN_ADAPTERS)
+        raise EvmError(f"unknown compiler adapter {adapter!r}; known adapters: {known}")
 
 
 def _requested_selector(
