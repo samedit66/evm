@@ -23,6 +23,7 @@ from evm.toolchain.selection import (
     compiler_command,
     prepare_build_directory,
     run_compiler,
+    toolchain_environment_values,
 )
 
 _EIFFEL_IDENTIFIER_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
@@ -215,14 +216,14 @@ def _compiler_view(
         option,
         subject,
     ]
+    environment = os.environ.copy()
+    environment.update(dict(toolchain_environment_values(command)))
+    environment["evm_compiler"] = "ise"
+    environment["evm_architecture"] = platform.machine().lower()
     completed = subprocess.run(
         command,
         cwd=context.project.directory,
-        env={
-            **os.environ,
-            "evm_compiler": "ise",
-            "evm_architecture": platform.machine().lower(),
-        },
+        env=environment,
         check=False,
         capture_output=True,
         text=True,

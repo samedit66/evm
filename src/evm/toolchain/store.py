@@ -272,11 +272,24 @@ def verify_installation(installation: ToolchainInstallation) -> tuple[str, ...]:
     except EvmError as error:
         diagnostics.append(str(error))
     else:
-        if detected_version != installation.revision:
+        if not _reported_version_matches(installation, detected_version):
             diagnostics.append(
                 f"compiler reports version {detected_version}, expected {installation.revision}"
             )
     return tuple(diagnostics)
+
+
+def _reported_version_matches(
+    installation: ToolchainInstallation,
+    detected_version: str,
+) -> bool:
+    if installation.provider != "ise":
+        return detected_version == installation.revision
+    detected_parts = detected_version.split(".")
+    expected_parts = installation.revision.split(".")
+    return detected_parts[:2] == expected_parts[:2] and "".join(detected_parts[2:]) == "".join(
+        expected_parts[2:]
+    )
 
 
 def _verify_serpent(installation: ToolchainInstallation) -> tuple[str, ...]:

@@ -602,7 +602,7 @@ def test_verify_probes_compiler_in_toolchain_environment(tmp_path: Path) -> None
     executable.write_text(
         "#!/bin/sh\n"
         f'test "$ISE_EIFFEL" = "{root}" || exit 2\n'
-        "echo 'ISE EiffelStudio version 25.12.98922'\n"
+        "echo 'ISE EiffelStudio version 25.12.9.8922'\n"
     )
     executable.chmod(0o755)
     installation = ToolchainInstallation(
@@ -616,6 +616,10 @@ def test_verify_probes_compiler_in_toolchain_environment(tmp_path: Path) -> None
     )
 
     assert verify_installation(installation) == ()
+
+    executable.write_text("#!/bin/sh\necho 'ISE EiffelStudio version 25.12.9.8923'\n")
+    executable.chmod(0o755)
+    assert "reports version 25.12.9.8923" in "\n".join(verify_installation(installation))
 
 
 def test_verify_runs_liberty_in_managed_environment(tmp_path: Path) -> None:

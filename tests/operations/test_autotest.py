@@ -12,6 +12,8 @@ from evm.operations.autotest import (
     AutoTestCase,
     AutoTestDiagnostic,
     AutoTestRunRequest,
+    _compiler_view,
+    _DiscoveryContext,
     _filter_autotest_cases,
     _generate_runner_project,
     _parse_descendants,
@@ -75,6 +77,38 @@ def test_filters_autotest_cases_by_exact_case_insensitive_names() -> None:
 
     with pytest.raises(EvmError, match="no AutoTest tests matched"):
         _filter_autotest_cases(cases, "CALCULATOR", None)
+
+
+def test_compiler_view_uses_managed_toolchain_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
+    toolchain = Toolchain(
+        "ise",
+        tmp_path / "managed" / "bin" / "ec",
+        NumericVersion.parse("25.12"),
+        "automatic",
+        "managed",
+    )
+    context = _DiscoveryContext(toolchain, project, BuildRequest(), tmp_path / "build")
+    invocations: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        "evm.operations.autotest.toolchain_environment_values",
+        lambda command: (("ISE_EIFFEL", "/managed/ise"), ("ISE_LIBRARY", "/managed/ise")),
+    )
+    monkeypatch.setattr(
+        "evm.operations.autotest.subprocess.run",
+        lambda command, **options: (
+            invocations.append(options) or SimpleNamespace(returncode=0, stdout="output", stderr="")
+        ),
+    )
+
+    assert _compiler_view(context, "-descendants", "EQA_TEST_SET") == "output\n"
+    environment = invocations[0]["env"]
+    assert isinstance(environment, dict)
+    assert environment["ISE_EIFFEL"] == "/managed/ise"
+    assert environment["ISE_LIBRARY"] == "/managed/ise"
 
 
 def test_generated_runner_registers_each_test() -> None:
