@@ -464,7 +464,7 @@ def _script_value(script: str, name: str) -> str:
 
 
 def _artifact_matches(artifact: ToolchainArtifact, requested: str) -> bool:
-    if requested == "latest":
+    if requested in {"latest", "stable"}:
         return artifact.channel == "stable"
     if requested in {"beta", "nightly"}:
         return artifact.channel == requested

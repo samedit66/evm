@@ -92,6 +92,10 @@ def _list_available_toolchains(provider: str | None, output_json: bool) -> None:
             f"{artifact.provider}@{artifact.version}\t{artifact.channel}\t"
             f"{artifact.platform.identifier}"
         )
+    click.echo(
+        "You can specify an exact toolchain, such as ise@latest, ise@stable, "
+        "gobo@beta, or serpent@0.1.0."
+    )
 
 
 def _list_installed_toolchains(provider: str | None, output_json: bool) -> None:
