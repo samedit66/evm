@@ -115,7 +115,14 @@ _COMPONENTS = (
         "supported",
     ),
     _ComponentSpecification(
-        "gobo-gecc", "Gobo C Compiler", "eiffel", "gobo", "tool", "gecc", None, "partial"
+        "gobo-gecc",
+        "Gobo Eiffel C Compilation Driver",
+        "eiffel",
+        "gobo",
+        "tool",
+        "gecc",
+        ("--version",),
+        "partial",
     ),
     _ComponentSpecification(
         "gobo-gelint",
@@ -124,7 +131,17 @@ _COMPONENTS = (
         "gobo",
         "tool",
         "gelint",
-        None,
+        ("--version",),
+        "partial",
+    ),
+    _ComponentSpecification(
+        "gobo-gedoc",
+        "Gobo Eiffel Documentation Generator",
+        "eiffel",
+        "gobo",
+        "tool",
+        "gedoc",
+        ("--version",),
         "partial",
     ),
     _ComponentSpecification(

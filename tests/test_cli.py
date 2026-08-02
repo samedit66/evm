@@ -8,8 +8,10 @@ from click.testing import CliRunner
 from lxml import etree
 
 from evm.cli import main
+from evm.documentation import DocumentationResult
 from evm.ecf import ECF_NAMESPACE
 from evm.errors import EvmError
+from evm.linting import LintResult
 from evm.lockfile import load_lock
 from evm.manifest import load_manifest
 from evm.testing import TestDiagnostic as EvmTestDiagnostic
@@ -411,6 +413,37 @@ def test_test_rejects_conflicting_output_modes(tmp_path: Path, monkeypatch) -> N
     assert "--json, --trace, and --raw are mutually exclusive" in result.output
 
 
+def test_test_command_forwards_getest_capabilities(tmp_path: Path, monkeypatch) -> None:
+    project = tmp_path / "hello"
+    runner = CliRunner()
+    assert runner.invoke(main, ["new", str(project)]).exit_code == 0
+    monkeypatch.chdir(project)
+    requests = []
+    monkeypatch.setattr(
+        "evm.cli.test_project",
+        lambda current, request: (
+            requests.append(request) or EvmTestResult("passed", 0, 0.1, "gobo 26.07", "getest")
+        ),
+    )
+
+    result = runner.invoke(
+        main,
+        [
+            "test",
+            "--runner",
+            "getest",
+            "--define",
+            "MODE=fast",
+            "--default-test",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert requests[0].runner == "getest"
+    assert requests[0].defines == ("MODE=fast",)
+    assert requests[0].default_test is True
+
+
 def test_import_preserves_all_targets_and_unknown_ecf_constructs(
     tmp_path: Path,
     monkeypatch,
@@ -567,8 +600,91 @@ def test_main_help_lists_stage_one_commands() -> None:
         "discover",
         "explain",
         "import",
+        "lint",
+        "doc",
     ):
         assert command in result.output
+
+
+def test_lint_command_forwards_backend_options(tmp_path: Path, monkeypatch) -> None:
+    project = tmp_path / "sample"
+    assert CliRunner().invoke(main, ["new", str(project)]).exit_code == 0
+    requests = []
+    monkeypatch.chdir(project)
+    monkeypatch.setattr(
+        "evm.cli.lint_project",
+        lambda current, request: (
+            requests.append(request)
+            or LintResult("passed", 0, "gelint", "Gobo Eiffel 26.07", "clean\n")
+        ),
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "lint",
+            "--backend",
+            "gelint",
+            "--catcall",
+            "--flat",
+            "--standard",
+            "ecma",
+            "--threads",
+            "4",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Backend: gelint" in result.output
+    assert requests[0].catcall is True
+    assert requests[0].threads == 4
+
+
+def test_lint_command_preserves_failure_in_json(tmp_path: Path, monkeypatch) -> None:
+    project = tmp_path / "sample"
+    assert CliRunner().invoke(main, ["new", str(project)]).exit_code == 0
+    monkeypatch.chdir(project)
+    monkeypatch.setattr(
+        "evm.cli.lint_project",
+        lambda current, request: LintResult(
+            "failed", 3, "code-analyzer", "ISE EiffelStudio 25.12", stderr="finding\n"
+        ),
+    )
+
+    result = CliRunner().invoke(main, ["lint", "--json"])
+
+    assert result.exit_code == 3
+    assert json.loads(result.output)["packages"][0]["backend"] == "code-analyzer"
+
+
+def test_doc_command_reports_backend_and_output(tmp_path: Path, monkeypatch) -> None:
+    project = tmp_path / "sample"
+    assert CliRunner().invoke(main, ["new", str(project)]).exit_code == 0
+    output = project / "site"
+    requests = []
+    monkeypatch.chdir(project)
+    monkeypatch.setattr(
+        "evm.cli.document_project",
+        lambda current, request: (
+            requests.append(request)
+            or DocumentationResult(
+                "passed",
+                0,
+                "eiffelstudio",
+                "ISE EiffelStudio 25.12",
+                output,
+            )
+        ),
+    )
+
+    result = CliRunner().invoke(
+        main,
+        ["doc", "--backend", "eiffelstudio", "--output", str(output)],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Backend: eiffelstudio" in result.output
+    assert requests[0].output == output
 
 
 def test_doctor_command_is_not_available() -> None:

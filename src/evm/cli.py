@@ -21,10 +21,12 @@ from evm.dependency_commands import (
     update_dependencies,
 )
 from evm.discovery import discover_environment, discovery_lines
+from evm.documentation import DocumentationRequest, document_project
 from evm.ecf import semantic_diff
 from evm.errors import EvmError
 from evm.filesystem import atomic_write
 from evm.iron import IRON_PACKAGE_NAME, serialize_iron_package
+from evm.linting import LintRequest, lint_project
 from evm.lockfile import LOCK_NAME, ensure_lock_matches, load_lock
 from evm.model import BuildRequest, Dependency, Project
 from evm.project import (
@@ -97,6 +99,9 @@ class _TestCommandOptions:
     output_json: bool
     trace: bool
     raw: bool
+    runner: str | None
+    defines: tuple[str, ...]
+    default_test: bool
 
 
 @dataclass(frozen=True)
@@ -878,6 +883,13 @@ def deps_command(package: str | None, show_workspace: bool) -> None:
 @click.option("--json", "output_json", is_flag=True, help="Emit stable JSON for CI.")
 @click.option("--trace", is_flag=True, help="Show complete normalized failure diagnostics.")
 @click.option("--raw", is_flag=True, help="Pass through the test runner's native output.")
+@click.option(
+    "--runner",
+    type=click.Choice(("auto", "autotest", "getest", "target")),
+    help="Override the configured test runner.",
+)
+@click.option("--define", "defines", multiple=True, help="Pass NAME[=VALUE] to getest.")
+@click.option("--default-test", is_flag=True, help="Include getest's default_test feature.")
 @command_errors
 def test_command(
     **raw_options: Any,
@@ -901,6 +913,9 @@ def test_command(
                     offline=options.offline,
                     regenerate_ecf=options.regenerate_ecf,
                     raw=options.raw,
+                    runner=options.runner,
+                    defines=options.defines,
+                    default_test=options.default_test,
                 ),
             )
             label = compiler or "automatic"
@@ -1003,6 +1018,104 @@ def _test_summary(result: TestResult) -> str:
             parts.append(f"{count} {label}")
     parts.append(f"{result.tests} total")
     return f"{', '.join(parts)} in {result.elapsed_seconds:.2f}s"
+
+
+@main.command("lint")
+@click.option("--toolchain", "compiler", help="Toolchain selector, for example ise or gobo.")
+@click.option("--backend", type=click.Choice(("gelint", "code-analyzer")))
+@click.option("--target", help="Target name; defaults to project.default-target.")
+@click.option("--catcall", is_flag=True, help="Ask gelint to report possible CAT-calls.")
+@click.option("--flat", is_flag=True, help="Ask gelint to check inherited features.")
+@click.option("--standard", type=click.Choice(("ecma", "ise")))
+@click.option("--threads", type=int, help="Number of gelint worker threads.")
+@click.option("--rules", multiple=True, help="Enable EiffelStudio analyzer rule identifiers.")
+@click.option("--profile", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--offline", is_flag=True, help="Forbid network access.")
+@click.option("--regenerate-ecf", is_flag=True, help="Explicitly overwrite managed ECF.")
+@click.option("--package", help="Limit a workspace lint to one package.")
+@click.option("--json", "output_json", is_flag=True, help="Emit stable JSON for CI.")
+@command_errors
+def lint_command(**options: Any) -> None:
+    """Analyze Eiffel source code with gelint or EiffelStudio."""
+    projects = _command_projects(load_project_context(), options["package"])
+    results = []
+    failed_code = 0
+    for project in projects:
+        result = lint_project(
+            project,
+            LintRequest(
+                compiler=options["compiler"],
+                backend=options["backend"],
+                target=options["target"],
+                catcall=options["catcall"],
+                flat=options["flat"],
+                standard=options["standard"],
+                threads=options["threads"],
+                rules=tuple(options["rules"]),
+                profile=options["profile"],
+                offline=options["offline"],
+                regenerate_ecf=options["regenerate_ecf"],
+            ),
+        )
+        results.append({"package": project.name, **result.as_dict()})
+        failed_code = failed_code or result.exit_code
+        if not options["output_json"]:
+            click.echo(f"Package: {project.name}")
+            click.echo(f"Backend: {result.backend}")
+            click.echo(f"Compiler: {result.compiler}")
+            if result.stdout:
+                click.echo(result.stdout, nl=not result.stdout.endswith("\n"))
+            if result.stderr:
+                click.echo(result.stderr, nl=not result.stderr.endswith("\n"), err=True)
+    if options["output_json"]:
+        _echo_json_result("failed" if failed_code else "passed", results)
+    if failed_code:
+        raise click.exceptions.Exit(failed_code)
+
+
+@main.command("doc")
+@click.option("--toolchain", "compiler", help="Toolchain selector, for example ise or gobo.")
+@click.option("--backend", type=click.Choice(("gedoc", "eiffelstudio")))
+@click.option("--target", help="Target name; defaults to project.default-target.")
+@click.option("--output", type=click.Path(file_okay=False, path_type=Path))
+@click.option("--offline", is_flag=True, help="Forbid network access.")
+@click.option("--regenerate-ecf", is_flag=True, help="Explicitly overwrite managed ECF.")
+@click.option("--package", help="Limit workspace documentation to one package.")
+@click.option("--json", "output_json", is_flag=True, help="Emit stable JSON for CI.")
+@command_errors
+def doc_command(**options: Any) -> None:
+    """Generate HTML documentation with gedoc or EiffelStudio."""
+    projects = _command_projects(load_project_context(), options["package"])
+    results = []
+    failed_code = 0
+    for project in projects:
+        output = options["output"]
+        if output is not None and len(projects) > 1:
+            output /= project.name
+        result = document_project(
+            project,
+            DocumentationRequest(
+                compiler=options["compiler"],
+                backend=options["backend"],
+                target=options["target"],
+                output=output,
+                offline=options["offline"],
+                regenerate_ecf=options["regenerate_ecf"],
+            ),
+        )
+        results.append({"package": project.name, **result.as_dict()})
+        failed_code = failed_code or result.exit_code
+        if not options["output_json"]:
+            click.echo(f"{project.name}: documentation generated in {result.output_directory}")
+            click.echo(f"Backend: {result.backend}")
+            if result.stdout:
+                click.echo(result.stdout, nl=not result.stdout.endswith("\n"))
+            if result.stderr:
+                click.echo(result.stderr, nl=not result.stderr.endswith("\n"), err=True)
+    if options["output_json"]:
+        _echo_json_result("failed" if failed_code else "passed", results)
+    if failed_code:
+        raise click.exceptions.Exit(failed_code)
 
 
 def _print_test_detail(label: str, value: str) -> None:
@@ -1210,6 +1323,9 @@ def _test_command_options(values: Mapping[str, Any]) -> _TestCommandOptions:
         output_json=values["output_json"],
         trace=values["trace"],
         raw=values["raw"],
+        runner=values["runner"],
+        defines=tuple(values["defines"]),
+        default_test=values["default_test"],
     )
 
 

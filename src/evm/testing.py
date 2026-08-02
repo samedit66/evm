@@ -26,6 +26,9 @@ class TestRequest:
     offline: bool = False
     regenerate_ecf: bool = False
     raw: bool = False
+    runner: str | None = None
+    defines: tuple[str, ...] = ()
+    default_test: bool = False
 
 
 @dataclass(frozen=True)
@@ -135,12 +138,14 @@ def test_project(project: Project, request: TestRequest) -> TestResult:
     selected = select_toolchain(project, request.compiler)
     getest = shutil.which("getest")
     getest_configuration = _getest_configuration(project, selected.adapter)
-    configured_runner = project.test.runner
+    configured_runner = request.runner or project.test.runner
+    _validate_runner_capabilities(configured_runner, request)
     started = time.monotonic()
     counts: tuple[int, int, int, int] | None = None
     details: tuple[TestDiagnostic, ...] = ()
     runner_stdout: str | None = None
     runner_stderr: str | None = None
+    getest_capability_requested = bool(request.defines or request.default_test)
     if configured_runner == "autotest":
         execution = run_autotest(
             project,
@@ -160,7 +165,10 @@ def test_project(project: Project, request: TestRequest) -> TestResult:
             _test_diagnostic(project, project.test.target, item) for item in execution.diagnostics
         )
     elif configured_runner == "getest" or (
-        configured_runner == "auto" and getest is not None and getest_configuration is not None
+        configured_runner == "auto"
+        and (
+            getest_capability_requested or (getest is not None and getest_configuration is not None)
+        )
     ):
         if getest is None:
             raise EvmError("test.runner is 'getest', but getest was not found in PATH")
@@ -174,6 +182,7 @@ def test_project(project: Project, request: TestRequest) -> TestResult:
             getest_configuration,
         )
         runner = "getest"
+        counts = _parse_getest_summary(runner_stdout)
     else:
         if request.class_name is not None or request.feature is not None:
             raise EvmError(f"filter unsupported by {selected.adapter} test target adapter")
@@ -343,6 +352,10 @@ def _run_getest(
         command.append(f"--class={_exact_getest_pattern(request.class_name)}")
     if request.feature is not None:
         command.append(f"--feature={_exact_getest_pattern(request.feature)}")
+    for definition in request.defines:
+        command.append(f"--define={definition}")
+    if request.default_test:
+        command.append("--default_test")
     completed = subprocess.run(
         command,
         cwd=project.directory,
@@ -368,3 +381,34 @@ def _getest_configuration(project: Project, adapter: str) -> Path | None:
 
 def _exact_getest_pattern(name: str) -> str:
     return f"^{re.escape(name)}$"
+
+
+def _validate_runner_capabilities(runner: str, request: TestRequest) -> None:
+    if runner not in {"auto", "autotest", "getest", "target"}:
+        raise EvmError("test runner must be one of: auto, autotest, getest, target")
+    getest_features = []
+    if request.defines:
+        getest_features.append("--define")
+    if request.default_test:
+        getest_features.append("--default-test")
+    if getest_features and runner not in {"auto", "getest"}:
+        options = ", ".join(getest_features)
+        raise EvmError(
+            f"{options} uses capabilities unsupported by {runner}; select the getest runner"
+        )
+
+
+def _parse_getest_summary(output: str | None) -> tuple[int, int, int, int] | None:
+    if not output:
+        return None
+    patterns = {
+        "passed": re.compile(r"^#\s*passed:\s*(\d+)\s+tests?", re.IGNORECASE | re.MULTILINE),
+        "failed": re.compile(r"^#\s*failed:\s*(\d+)\s+tests?", re.IGNORECASE | re.MULTILINE),
+        "aborted": re.compile(r"^#\s*aborted:\s*(\d+)\s+tests?", re.IGNORECASE | re.MULTILINE),
+        "total": re.compile(r"^#\s*total:\s*(\d+)\s+tests?", re.IGNORECASE | re.MULTILINE),
+    }
+    matches = {name: pattern.search(output) for name, pattern in patterns.items()}
+    if any(match is None for match in matches.values()):
+        return None
+    values = {name: int(match.group(1)) for name, match in matches.items() if match is not None}
+    return values["total"], values["passed"], values["failed"], values["aborted"]

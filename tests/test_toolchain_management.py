@@ -32,6 +32,7 @@ from evm.toolchain_install import (
     resolve_artifact,
 )
 from evm.toolchain_store import (
+    gobo_shell_root,
     list_installations,
     probe_linked_installation,
     register_linked_installation,
@@ -51,6 +52,7 @@ from evm.toolchain_types import (
     ToolchainSelector,
     current_toolchain_platform,
 )
+from evm.toolchains import toolchain_environment_values
 
 
 def test_selector_accepts_provider_and_exact_version() -> None:
@@ -248,9 +250,192 @@ def test_toolchain_environment_for_gobo_and_ise(tmp_path: Path) -> None:
     assert gobo_environment["GOBO"] == str(gobo.root)
     assert gobo_environment["PATH"].endswith(os.pathsep + "/usr/bin")
     assert gobo_environment["EVM_TOOLCHAIN"] == "gobo@26.06"
+    assert gobo_environment["ISE_PLATFORM"] == platform.ise_platform
+    assert "GOBO_CC" not in gobo_environment
     assert ise_environment["ISE_EIFFEL"] == str(ise.root)
     assert ise_environment["ISE_LIBRARY"] == str(ise.root)
     assert ise_environment["ISE_PLATFORM"] == platform.ise_platform
+
+
+def test_gobo_environment_replaces_incompatible_ise_platform(tmp_path: Path) -> None:
+    platform = current_toolchain_platform()
+    installation = _installation(tmp_path / "gobo", "gobo", "26.06", "26.06.30", platform)
+
+    environment = toolchain_environment(
+        installation,
+        {
+            "PATH": "/usr/bin",
+            "ISE_PLATFORM": "linux-x86-64",
+            "GOBO_CC": "zig",
+        },
+    )
+
+    assert environment["ISE_PLATFORM"] == platform.ise_platform
+    assert environment["GOBO_CC"] == "zig"
+
+
+def test_gobo_environment_uses_space_free_alias(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "Gobo Distribution" / "root"
+    installation = _installation(
+        root,
+        "gobo",
+        "26.06",
+        "26.06.30",
+        current_toolchain_platform(),
+    )
+    root.mkdir(parents=True)
+    alias_home = tmp_path / "aliases"
+    monkeypatch.setenv("EVM_TOOLCHAIN_ALIAS_HOME", str(alias_home))
+
+    environment = toolchain_environment(installation, {"PATH": "/usr/bin"})
+    alias = Path(environment["GOBO"])
+
+    assert " " not in str(alias)
+    assert alias.is_symlink()
+    assert alias.resolve() == root.resolve()
+    assert environment["PATH"].split(os.pathsep)[0] == str(alias / "bin")
+    assert gobo_shell_root(installation) == alias
+
+
+def test_linked_gobo_environment_uses_space_free_alias(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "Linked Gobo" / "root"
+    managed = _installation(
+        root,
+        "gobo",
+        "26.06",
+        "26.06.30",
+        current_toolchain_platform(),
+    )
+    installation = ToolchainInstallation(
+        managed.provider,
+        managed.version,
+        managed.revision,
+        managed.platform,
+        managed.root,
+        managed.executable,
+        InstallationKind.LINKED,
+    )
+    root.mkdir(parents=True)
+    monkeypatch.setenv("EVM_TOOLCHAIN_ALIAS_HOME", str(tmp_path / "aliases"))
+
+    alias = Path(toolchain_environment(installation, {})["GOBO"])
+
+    assert alias.is_symlink()
+    assert alias.resolve() == root.resolve()
+    assert root.is_dir()
+
+
+def test_compiler_environment_preserves_system_path_and_gobo_backend(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    installation = _installation(
+        tmp_path / "gobo",
+        "gobo",
+        "26.06",
+        "26.06.30",
+        current_toolchain_platform(),
+    )
+    monkeypatch.setattr("evm.toolchains.list_installations", lambda: (installation,))
+    monkeypatch.setenv("PATH", "/usr/local/bin:/usr/bin")
+    monkeypatch.setenv("GOBO_CC", "gcc")
+    monkeypatch.setenv("ISE_PLATFORM", "linux-x86-64")
+
+    environment = dict(toolchain_environment_values([str(installation.executable)]))
+
+    assert environment["PATH"].endswith("/usr/local/bin:/usr/bin")
+    assert environment["GOBO_CC"] == "gcc"
+    assert environment["ISE_PLATFORM"] == installation.platform.ise_platform
+
+
+def test_gobo_alias_repairs_stale_symlink(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "Gobo Distribution" / "root"
+    root.mkdir(parents=True)
+    installation = _installation(
+        root,
+        "gobo",
+        "26.06",
+        "26.06.30",
+        current_toolchain_platform(),
+    )
+    monkeypatch.setenv("EVM_TOOLCHAIN_ALIAS_HOME", str(tmp_path / "aliases"))
+    alias = gobo_shell_root(installation)
+    wrong_root = tmp_path / "wrong"
+    wrong_root.mkdir()
+    alias.unlink()
+    alias.symlink_to(wrong_root, target_is_directory=True)
+
+    repaired = gobo_shell_root(installation)
+
+    assert repaired == alias
+    assert repaired.resolve() == root.resolve()
+
+
+def test_gobo_alias_refuses_to_replace_regular_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "Gobo Distribution" / "root"
+    root.mkdir(parents=True)
+    installation = _installation(
+        root,
+        "gobo",
+        "26.06",
+        "26.06.30",
+        current_toolchain_platform(),
+    )
+    monkeypatch.setenv("EVM_TOOLCHAIN_ALIAS_HOME", str(tmp_path / "aliases"))
+    alias = gobo_shell_root(installation)
+    alias.unlink()
+    alias.write_text("occupied")
+
+    with pytest.raises(EvmError, match="occupied by a non-symlink"):
+        gobo_shell_root(installation)
+
+
+def test_removing_managed_gobo_removes_its_alias(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = tmp_path / "store with space"
+    monkeypatch.setenv("EVM_TOOLCHAIN_HOME", str(store))
+    monkeypatch.setenv("EVM_TOOLCHAIN_ALIAS_HOME", str(tmp_path / "aliases"))
+    installation = _managed_installation(store, "gobo", "26.06", "26.06.30")
+    save_managed_installation(installation)
+    alias = Path(toolchain_environment(installation, {})["GOBO"])
+
+    remove_installation(installation)
+
+    assert not os.path.lexists(alias)
+
+
+def test_verify_reports_unsafe_gobo_alias_home(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "Gobo Distribution" / "root"
+    installation = _installation(
+        root,
+        "gobo",
+        "26.06",
+        "26.06.30",
+        current_toolchain_platform(),
+    )
+    _version_executable(installation.executable, "gobo 26.06.30")
+    monkeypatch.setenv("EVM_TOOLCHAIN_ALIAS_HOME", str(tmp_path / "alias home"))
+
+    diagnostics = verify_installation(installation)
+
+    assert "alias path contains whitespace" in "\n".join(diagnostics)
 
 
 def test_environment_renderers_quote_values() -> None:

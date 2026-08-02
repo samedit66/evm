@@ -268,7 +268,7 @@ EiffelStudio / ec или Gobo / gec
 
 ```text
 Управление проектом
-  new, add, remove, update, build, run, test, workspace
+  new, add, remove, update, build, run, test, lint, doc, workspace
                          ↓
 Воспроизводимая модель
   manifest, dependency solver, lock-файл, targets, build modes
@@ -1642,6 +1642,16 @@ stdout и stderr. Поскольку AutoTest не предоставляет с
 Для AutoTest значения являются точными регистронезависимыми именами. Отсутствие
 совпадений ДОЛЖНО быть ошибкой `no tests matched`, а не успешным пустым запуском.
 
+Getest-specific возможности, включая `default_test` и передаваемые через `-D`
+переменные, ДОЛЖНЫ выполняться только adapter `getest`. Если такая возможность
+запрошена с `autotest` или выделенным test target, EVM ДОЛЖЕН сообщить, что
+выбранный runner ее не поддерживает и что она доступна через `getest`. EVM НЕ
+ДОЛЖЕН молча переключать runner: `EQA_TEST_SET` AutoTest и `TS_TEST_CASE`
+Getest являются различными моделями тестов.
+
+CLI МОЖЕТ переопределить manifest через `evm test --runner=<name>`. Опции
+`--define=NAME[=VALUE]` и `--default-test` требуют effective runner `getest`.
+
 Минимальный итоговый формат для структурированного AutoTest adapter:
 
 ```text
@@ -1652,6 +1662,40 @@ tests/string_tests.e:42
 
 1 failed, 9 passed, 10 total in 0.84s
 ```
+
+### 11.5.1. Статический анализ
+
+`evm lint` ДОЛЖЕН предоставлять два backend:
+
+- `gelint`, поставляемый в составе зарегистрированной Gobo Eiffel installation;
+- `code-analyzer`, запускаемый через CLI EiffelStudio `ec`.
+
+Автоматический backend соответствует выбранному compiler adapter: Gobo использует
+`gelint`, ISE использует EiffelStudio Code Analyzer. Явный `--backend` НЕ ДОЛЖЕН
+молча заменяться другим backend. Для ISE-проекта `--backend=gelint` разрешен при
+наличии зарегистрированной Gobo installation и ДОЛЖЕН передать gelint версию
+ISE-семантики через `--ise`. При отсутствии Gobo команда ДОЛЖНА сообщить, как
+установить или связать Gobo либо выбрать `--backend=code-analyzer`.
+
+Backend `gelint` ДОЛЖЕН поддерживать как минимум target, `--catcall`, `--flat`,
+ECMA/ISE semantics и число threads. Backend EiffelStudio ДОЛЖЕН поддерживать
+анализ всей системы, список rule identifiers и файл preferences. Наборы правил
+backend различаются и НЕ ДОЛЖНЫ представляться как семантически эквивалентные.
+
+### 11.5.2. Генерация документации
+
+`evm doc` ДОЛЖЕН генерировать HTML-документацию и предоставлять два backend:
+
+- `gedoc` с форматом `html_ise_stylesheet` для Gobo;
+- встроенную генерацию EiffelStudio через `ec -filter html-stylesheet -all`.
+
+Автоматический backend соответствует выбранному compiler adapter. Явный
+`--backend=gedoc` для ISE-проекта требует зарегистрированную Gobo installation и
+использует ISE-семантику. Явный `--backend=eiffelstudio` требует ISE toolchain.
+По умолчанию output располагается в `build/doc/<target>`; `--output` МОЖЕТ
+переопределить каталог. Команда НЕ ДОЛЖНА изменять исходные Eiffel-файлы или ECF.
+Markdown является запланированным форматом собственного generator и не входит в
+текущую гарантию `evm doc`.
 
 Наличие непройденных тестов ДОЛЖНО приводить к ненулевому exit code.
 Поля Tests/Passed/Failed/Unresolved добавляются только когда adapter надежно
@@ -2624,6 +2668,10 @@ ECF считается переносимым backend в пределах воз
 - [Gec Limitations](https://gobo-eiffel.github.io/gobo/tool/gec/doc/limitations.html);
 - [Gobo Eiffel Project](https://gobo-eiffel.github.io/gobo/);
 - [Geant](https://gobo-eiffel.github.io/gobo/tool/geant/doc/overview.html).
+- [Gobo Eiffel Lint](https://gobo-eiffel.github.io/gobo/tool/gelint/doc/index.html);
+- [Gobo Eiffel Doc](https://gobo-eiffel.github.io/gobo/tool/gedoc/doc/index.html);
+- [EiffelStudio Code Analyzer](https://www.eiffel.org/doc/eiffelstudio/Running_the_Code_Analyzer);
+- [EiffelStudio command-line options](https://www.eiffel.org/doc/eiffelstudio/EiffelStudio-_Using_command_line_options).
 
 Capability matrix НЕ ДОЛЖНА быть навсегда зашита в код без версии: ограничения
 `gec` меняются между выпусками, поэтому данные о supported, partial,

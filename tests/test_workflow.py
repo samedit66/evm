@@ -15,7 +15,7 @@ from evm.manifest import parse_manifest
 from evm.model import Project, Task, TaskStep
 from evm.tasks import run_task
 from evm.testing import TestRequest as WorkflowTestRequest
-from evm.testing import _find_assertion_line
+from evm.testing import _find_assertion_line, _parse_getest_summary
 from evm.testing import test_project as run_project_tests
 from evm.toolchains import Toolchain
 from evm.versioning import NumericVersion
@@ -402,6 +402,84 @@ sources = ["tests"]
             project,
             WorkflowTestRequest(compiler="gobo", feature="test_append"),
         )
+
+
+def test_getest_summary_is_normalized() -> None:
+    output = """
+Test Summary for sample
+
+# Passed: 3 tests
+# FAILED: 1 test
+# ABORTED: 2 tests
+# Total: 6 tests (10 assertions)
+"""
+
+    assert _parse_getest_summary(output) == (6, 3, 1, 2)
+    assert _parse_getest_summary("incomplete") is None
+    assert _parse_getest_summary(None) is None
+
+
+@pytest.mark.parametrize("runner", ["autotest", "target"])
+def test_getest_only_options_report_incompatible_runner(
+    tmp_path: Path,
+    monkeypatch,
+    runner: str,
+) -> None:
+    project = parse_manifest(
+        _manifest()
+        + f"""
+[targets.test]
+root = "TEST_APPLICATION.make"
+sources = ["tests"]
+
+[test]
+target = "test"
+runner = "{runner}"
+""",
+        tmp_path / "Eiffel.toml",
+    )
+    monkeypatch.setattr(
+        "evm.testing.select_toolchain",
+        lambda project, compiler: Toolchain(
+            "ise",
+            Path("/tools/ec"),
+            NumericVersion.parse("25.12"),
+            "explicit",
+            "test",
+        ),
+    )
+
+    with pytest.raises(EvmError, match=r"supported by.*getest|select the getest runner"):
+        run_project_tests(project, WorkflowTestRequest(default_test=True))
+
+
+def test_getest_only_option_requires_configuration_in_auto_mode(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project = parse_manifest(
+        _manifest()
+        + """
+[targets.test]
+root = "TEST_APPLICATION.make"
+sources = ["tests"]
+""",
+        tmp_path / "Eiffel.toml",
+    )
+    monkeypatch.setattr(
+        "evm.testing.select_toolchain",
+        lambda project, compiler: Toolchain(
+            "gobo",
+            Path("/tools/gec"),
+            NumericVersion.parse("26.07"),
+            "explicit",
+            "test",
+        ),
+    )
+    monkeypatch.setattr("evm.testing.shutil.which", lambda executable: "/tools/getest")
+
+    with pytest.raises(EvmError, match="no getest configuration"):
+        run_project_tests(project, WorkflowTestRequest(default_test=True))
 
 
 def test_workspace_orders_dependencies_and_uses_shared_state(tmp_path: Path) -> None:

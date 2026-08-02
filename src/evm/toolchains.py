@@ -279,7 +279,10 @@ def toolchain_environment_values(command: list[str]) -> tuple[tuple[str, str], .
     installation = _installation_for_executable(executable)
     if installation is None:
         return ()
-    return tuple(toolchain_environment(installation, {}).items())
+    inherited_environment = {"PATH": os.environ.get("PATH", "")}
+    if gobo_cc := os.environ.get("GOBO_CC"):
+        inherited_environment["GOBO_CC"] = gobo_cc
+    return tuple(toolchain_environment(installation, inherited_environment).items())
 
 
 def artifact_candidates(
@@ -343,7 +346,12 @@ def _managed_detection(
 def _installation_for_executable(executable: Path) -> ToolchainInstallation | None:
     resolved = executable.resolve()
     return next(
-        (item for item in list_installations() if item.executable.resolve() == resolved),
+        (
+            item
+            for item in list_installations()
+            if item.executable.resolve() == resolved
+            or item.executable.resolve().parent == resolved.parent
+        ),
         None,
     )
 

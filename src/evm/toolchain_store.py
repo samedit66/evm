@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import platform
 import re
@@ -30,6 +31,7 @@ _INSTALLATION_FILE = "installation.toml"
 _LINKED_FILE = "linked.toml"
 _VERSION_RE = re.compile(r"\d+(?:\.\d+)+")
 _PROBE_TIMEOUT_SECONDS = 15
+_GOBO_ALIAS_DIRECTORY = ".evm/toolchain-aliases"
 
 
 def user_toolchain_root(environment: Mapping[str, str] | None = None) -> Path:
@@ -141,6 +143,7 @@ def probe_linked_installation(path: Path) -> ToolchainInstallation:
 def remove_installation(installation: ToolchainInstallation) -> None:
     if installation.kind is InstallationKind.LINKED:
         _remove_linked_registration(installation)
+        _remove_gobo_alias(installation)
         return
     managed_root = user_toolchain_root() / "managed"
     installation_directory = installation.root.parent.resolve()
@@ -148,6 +151,7 @@ def remove_installation(installation: ToolchainInstallation) -> None:
         installation_directory.relative_to(managed_root.resolve())
     except ValueError as error:
         raise EvmError(f"refusing to remove unmanaged path: {installation_directory}") from error
+    _remove_gobo_alias(installation)
     shutil.rmtree(installation_directory)
 
 
@@ -156,19 +160,50 @@ def toolchain_environment(
     base: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     environment = dict(os.environ if base is None else base)
-    path_entries = _toolchain_path_entries(installation)
+    effective_root = gobo_shell_root(installation) if installation.provider == "gobo" else None
+    path_entries = _toolchain_path_entries(installation, effective_root)
     existing_path = environment.get("PATH")
     if existing_path:
         path_entries.append(existing_path)
     environment["PATH"] = os.pathsep.join(path_entries)
     environment["EVM_TOOLCHAIN"] = installation.selector
     if installation.provider == "gobo":
-        environment["GOBO"] = str(installation.root)
+        if effective_root is None:
+            raise AssertionError("Gobo environment has no effective root")
+        environment["GOBO"] = str(effective_root)
+        environment["ISE_PLATFORM"] = installation.platform.ise_platform
     else:
         environment["ISE_EIFFEL"] = str(installation.root)
         environment["ISE_LIBRARY"] = str(installation.root)
         environment["ISE_PLATFORM"] = installation.platform.ise_platform
     return environment
+
+
+def gobo_shell_root(installation: ToolchainInstallation) -> Path:
+    if installation.provider != "gobo":
+        raise EvmError("a shell-safe Gobo root requires a Gobo installation")
+    root = installation.root.resolve()
+    if os.name == "nt" or not _contains_whitespace(root):
+        return root
+    alias = _gobo_alias_path(installation)
+    if _contains_whitespace(alias):
+        raise EvmError(
+            f"Gobo alias path contains whitespace: {alias}; "
+            "set EVM_TOOLCHAIN_ALIAS_HOME to a path without whitespace"
+        )
+    alias.parent.mkdir(parents=True, exist_ok=True)
+    if alias.is_symlink() and alias.resolve() == root:
+        return alias
+    if alias.is_symlink():
+        alias.unlink()
+    elif os.path.lexists(alias):
+        raise EvmError(f"Gobo alias path is occupied by a non-symlink: {alias}")
+    try:
+        alias.symlink_to(root, target_is_directory=True)
+    except FileExistsError:
+        if not alias.is_symlink() or alias.resolve() != root:
+            raise EvmError(f"Gobo alias could not be created safely: {alias}") from None
+    return alias
 
 
 def render_environment(environment: Mapping[str, str], shell: str) -> str:
@@ -193,6 +228,11 @@ def verify_installation(installation: ToolchainInstallation) -> tuple[str, ...]:
     if not installation.executable.is_file():
         diagnostics.append(f"compiler executable is missing: {installation.executable}")
         return tuple(diagnostics)
+    if installation.provider == "gobo":
+        try:
+            gobo_shell_root(installation)
+        except EvmError as error:
+            diagnostics.append(str(error))
     try:
         detected_version = _probe_version(installation.provider, installation.executable)
     except EvmError as error:
@@ -352,9 +392,12 @@ def _probe_version(provider: str, executable: Path) -> str:
     return match.group(0)
 
 
-def _toolchain_path_entries(installation: ToolchainInstallation) -> list[str]:
+def _toolchain_path_entries(
+    installation: ToolchainInstallation,
+    effective_root: Path | None = None,
+) -> list[str]:
     if installation.provider == "gobo":
-        return [str(installation.root / "bin")]
+        return [str((effective_root or installation.root) / "bin")]
     root = installation.root
     platform = installation.platform.ise_platform
     return [
@@ -383,6 +426,25 @@ def _remove_linked_registration(installation: ToolchainInstallation) -> None:
         raise EvmError(f"linked toolchain is not registered: {installation.root}")
     document["toolchain"] = retained
     atomic_write(path, tomlkit.dumps(document).encode())
+
+
+def _gobo_alias_path(installation: ToolchainInstallation) -> Path:
+    override = os.environ.get("EVM_TOOLCHAIN_ALIAS_HOME")
+    alias_root = Path(override).expanduser() if override else Path.home() / _GOBO_ALIAS_DIRECTORY
+    fingerprint = hashlib.sha256(str(installation.root.resolve()).encode()).hexdigest()[:12]
+    return alias_root / "gobo" / f"{installation.revision}-{fingerprint}"
+
+
+def _remove_gobo_alias(installation: ToolchainInstallation) -> None:
+    if installation.provider != "gobo" or not _contains_whitespace(installation.root):
+        return
+    alias = _gobo_alias_path(installation)
+    if alias.is_symlink() and alias.resolve() == installation.root.resolve():
+        alias.unlink()
+
+
+def _contains_whitespace(path: Path) -> bool:
+    return any(character.isspace() for character in str(path))
 
 
 def _dotenv_quote(value: str) -> str:

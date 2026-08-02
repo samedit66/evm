@@ -122,7 +122,14 @@ directory. Common operations stay short:
 evm check
 evm build --release
 evm test
+evm lint
+evm doc
 ```
+
+`evm lint` uses Gobo `gelint` or EiffelStudio Code Analyzer according to the
+selected toolchain. `evm doc` generates HTML through Gobo `gedoc` or the native
+EiffelStudio documentation filter. Both commands accept an explicit `--backend`
+when a project needs to pin the implementation.
 
 ### Add and use a dependency
 
