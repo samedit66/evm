@@ -1,0 +1,19 @@
+[project]
+name = "evm_http_core"
+version = "0.1.0"
+type = "library"
+uuid = "2dace6d7-2f8d-44a4-9381-530c47d6f661"
+ecf = "core.ecf"
+ecf-managed = true
+
+[sources]
+clusters = ["src"]
+
+[targets.test]
+root = "EVM_HTTP_TESTS.default_create"
+sources = ["tests"]
+extends = "default"
+
+[test]
+target = "test"
+runner = "autotest"

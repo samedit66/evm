@@ -1,0 +1,17 @@
+[project]
+name = "evm_http_ise_transport"
+version = "0.1.0"
+type = "library"
+uuid = "bfb5564e-9f6f-4dcf-8f52-bf7d75e9d799"
+ecf = "ise_transport.ecf"
+ecf-managed = true
+
+[sources]
+clusters = ["src"]
+
+[dependencies]
+evm_http_core = { path = "../core" }
+http_client = { source = "ise", library = "http_client", ecf = "http_client.ecf" }
+
+[compatibility]
+compilers = ["ise"]

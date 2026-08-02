@@ -1,0 +1,21 @@
+format-version = 2
+manifest-fingerprint = "87f4a9e36ff11dbb10b2a52bec956e48425d110862d860682629f5c7f7886543"
+
+[[package]]
+name = "evm_http_core"
+version = "0.1.0"
+source = "path+../core"
+checksum = "sha256:65d31eb51f7fb937898b5852e5b021542e6987f382832bb3cf32db5e3a125368"
+manifest = "Eiffel.toml"
+ecf = "core.ecf"
+path = "../core"
+path-kind = "external"
+
+[[package]]
+name = "http_client"
+version = "25.02.9.8732"
+source = "eiffelstudio"
+checksum = "sha256:e3fb8a92a7eaf6629434d59e527a5ec389e4c2ec1dbc344ac2573a1ac1bb9013"
+ecf = "contrib/library/network/http_client/http_client.ecf"
+path-kind = "ise-contrib-library"
+library = "http_client"

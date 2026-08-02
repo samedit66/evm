@@ -1,0 +1,41 @@
+format-version = 2
+manifest-fingerprint = "855b91678c248c544cb2f38dd4d3e0d89c26127a646165e6a118689e064caac2"
+
+[[package]]
+name = "ejson"
+version = "0.0.0"
+source = "git+https://github.com/eiffelhub/json.git"
+requested = "tag:v0.11"
+revision = "c8a0f396be761a552e6b1602e8cefd7140bc47a2"
+tree = "aa7dd765dd929a682f6fd24ab9c698f7cf619bbc"
+ecf = "library/json.ecf"
+
+[[package]]
+name = "evm_http_core"
+version = "0.1.0"
+source = "path+../packages/core"
+checksum = "sha256:65d31eb51f7fb937898b5852e5b021542e6987f382832bb3cf32db5e3a125368"
+manifest = "Eiffel.toml"
+ecf = "core.ecf"
+path = "../packages/core"
+path-kind = "external"
+
+[[package]]
+name = "evm_http_ise_transport"
+version = "0.1.0"
+source = "path+../packages/ise_transport"
+dependencies = ["evm_http_core", "http_client"]
+checksum = "sha256:11c472b8b2c0eb26497e38233cc5a1c899a1f1c69f7d03e1471f8ac722f29fcd"
+manifest = "Eiffel.toml"
+ecf = "ise_transport.ecf"
+path = "../packages/ise_transport"
+path-kind = "external"
+
+[[package]]
+name = "http_client"
+version = "25.02.9.8732"
+source = "eiffelstudio"
+checksum = "sha256:e3fb8a92a7eaf6629434d59e527a5ec389e4c2ec1dbc344ac2573a1ac1bb9013"
+ecf = "contrib/library/network/http_client/http_client.ecf"
+path-kind = "ise-contrib-library"
+library = "http_client"

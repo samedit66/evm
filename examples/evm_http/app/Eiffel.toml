@@ -1,0 +1,22 @@
+[project]
+name = "app"
+version = "0.1.0"
+type = "application"
+uuid = "aa93df91-7c25-4e82-a6be-e8631fc6513f"
+ecf = "app.ecf"
+ecf-managed = true
+
+[root]
+class = "APPLICATION"
+feature = "make"
+
+[sources]
+clusters = ["src"]
+
+[dependencies]
+evm_http_core = { path = "../packages/core" }
+evm_http_ise_transport = { path = "../packages/ise_transport" }
+ejson = { git = "https://github.com/eiffelhub/json.git", tag = "v0.11", ecf = "library/json.ecf" }
+
+[compatibility]
+compilers = ["ise"]
