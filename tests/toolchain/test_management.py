@@ -19,6 +19,8 @@ from evm.errors import EvmError
 from evm.lockfile import LockedToolchain, LockFile, load_lock, serialize_lock
 from evm.manifest import load_manifest
 from evm.project.creation import ProjectCreationRequest, create_project
+from evm.toolchain import installation as installation_module
+from evm.toolchain.cli import InstallationProgressRenderer
 from evm.toolchain.commands import (
     configure_project_toolchains,
     locked_toolchains_for_current_platform,
@@ -26,14 +28,19 @@ from evm.toolchain.commands import (
     record_installed_toolchains,
 )
 from evm.toolchain.installation import (
+    InstallationProgress,
     available_artifacts,
+    find_serpent_bison,
+    install_bison_with_homebrew,
     install_locked_toolchain,
+    install_serpent_python_with_uv,
     install_toolchain,
     resolve_artifact,
 )
 from evm.toolchain.selection import toolchain_environment_values
 from evm.toolchain.store import (
     gobo_shell_root,
+    legacy_toolchain_roots,
     list_installations,
     probe_linked_installation,
     register_linked_installation,
@@ -125,7 +132,29 @@ def test_user_store_uses_platform_conventions(
         tmp_path / "evm" / "toolchains"
     )
     monkeypatch.setattr("evm.toolchain.store.platform.system", lambda: "Darwin")
-    assert "Library/Application Support/evm/toolchains" in str(user_toolchain_root({}))
+    assert user_toolchain_root({}) == Path.home() / ".local/share/evm/toolchains"
+    assert legacy_toolchain_roots({}) == (
+        Path.home() / "Library/Application Support/evm/toolchains",
+    )
+
+
+def test_store_discovers_and_removes_legacy_macos_installation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "home"
+    legacy_store = home / "Library/Application Support/evm/toolchains"
+    installation = _managed_installation(legacy_store, "gobo", "26.06", "26.06.30")
+    save_managed_installation(installation)
+    monkeypatch.delenv("EVM_TOOLCHAIN_HOME", raising=False)
+    monkeypatch.setattr("evm.toolchain.store.Path.home", lambda: home)
+    monkeypatch.setattr("evm.toolchain.store.platform.system", lambda: "Darwin")
+
+    assert list_installations() == (installation,)
+
+    remove_installation(installation)
+
+    assert list_installations() == ()
 
 
 def test_managed_installation_round_trip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -474,6 +503,85 @@ def test_verify_reports_missing_and_changed_compiler(tmp_path: Path) -> None:
     assert "cannot run" in "\n".join(verify_installation(changed))
 
 
+def test_verify_runs_liberty_in_managed_environment(tmp_path: Path) -> None:
+    root = tmp_path / "liberty"
+    executable = root / "target" / "bin" / "se"
+    expected_home = root / ".home"
+    expected_home.mkdir(parents=True)
+    configuration = expected_home / ".config" / "liberty-eiffel"
+    configuration.parent.mkdir()
+    configuration.write_text("configured")
+    executable.parent.mkdir(parents=True)
+    executable.write_text(f'#!/bin/sh\ntest "$HOME" = "{expected_home}" || exit 2\nexit 0\n')
+    executable.chmod(0o755)
+    installation = ToolchainInstallation(
+        "liberty",
+        "0.0",
+        "21b0813",
+        current_toolchain_platform(),
+        root,
+        executable,
+        InstallationKind.MANAGED,
+    )
+
+    assert verify_installation(installation) == ()
+
+
+@pytest.mark.parametrize(
+    ("root_name", "configuration_exists", "expected"),
+    [
+        ("liberty with space", True, "path contains whitespace"),
+        ("liberty", False, "managed configuration is missing"),
+    ],
+)
+def test_verify_reports_unsupported_liberty_layout(
+    tmp_path: Path,
+    root_name: str,
+    configuration_exists: bool,
+    expected: str,
+) -> None:
+    root = tmp_path / root_name
+    executable = root / "target" / "bin" / "se"
+    _version_executable(executable, "Liberty Eiffel")
+    if configuration_exists:
+        configuration = root / ".home" / ".config" / "liberty-eiffel"
+        configuration.parent.mkdir(parents=True)
+        configuration.write_text("configured")
+    installation = ToolchainInstallation(
+        "liberty",
+        "0.0",
+        "21b0813",
+        current_toolchain_platform(),
+        root,
+        executable,
+        InstallationKind.MANAGED,
+    )
+
+    assert expected in "\n".join(verify_installation(installation))
+
+
+def test_verify_reports_broken_serpent_environment(tmp_path: Path) -> None:
+    root = tmp_path / "serpent"
+    executable = root / "bin" / "python"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("#!/bin/sh\necho 'missing serpent' >&2\nexit 1\n")
+    executable.chmod(0o755)
+    installation = ToolchainInstallation(
+        "serpent",
+        "0.1.0",
+        "c95ab51",
+        current_toolchain_platform(),
+        root,
+        executable,
+        InstallationKind.MANAGED,
+    )
+
+    diagnostics = verify_installation(installation)
+
+    assert "Serpent Python environment is not usable" in diagnostics[0]
+    assert "missing serpent" in diagnostics[0]
+
+
 def test_gobo_catalog_filters_platform_asset() -> None:
     platform = current_toolchain_platform("Linux", "x86_64")
     releases = [
@@ -539,6 +647,142 @@ def test_serpent_catalog_resolves_latest_and_exact_commit() -> None:
     assert exact.url.endswith(f"/{revision}.zip")
 
 
+@pytest.mark.parametrize(
+    ("version", "compatible"),
+    [("2.3", False), ("3.6.4", False), ("3.7", True), ("3.8.2", True)],
+)
+def test_serpent_requires_modern_gnu_bison(
+    version: str,
+    compatible: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "evm.toolchain.installation.shutil.which",
+        lambda name: "/usr/bin/bison" if name == "bison" else None,
+    )
+    monkeypatch.setattr("evm.toolchain.installation.system_platform.system", lambda: "Linux")
+    monkeypatch.setattr(
+        "evm.toolchain.installation.subprocess.run",
+        lambda command, **options: SimpleNamespace(
+            returncode=0,
+            stdout=f"bison (GNU Bison) {version}\n",
+            stderr="",
+        ),
+    )
+
+    result = find_serpent_bison()
+
+    assert (result is not None) is compatible
+
+
+def test_serpent_finds_keg_only_homebrew_bison(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("evm.toolchain.installation.system_platform.system", lambda: "Darwin")
+    monkeypatch.setattr(
+        "evm.toolchain.installation.shutil.which",
+        lambda name: {"bison": "/usr/bin/bison", "brew": "/opt/homebrew/bin/brew"}.get(name),
+    )
+
+    def run(command: list[str], **options: object) -> SimpleNamespace:
+        if command == ["/opt/homebrew/bin/brew", "--prefix", "bison"]:
+            return SimpleNamespace(returncode=0, stdout="/opt/homebrew/opt/bison\n", stderr="")
+        version = "3.8.2" if command[0].startswith("/opt/homebrew/opt") else "2.3"
+        return SimpleNamespace(
+            returncode=0,
+            stdout=f"bison (GNU Bison) {version}\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr("evm.toolchain.installation.subprocess.run", run)
+
+    assert find_serpent_bison() == "/opt/homebrew/opt/bison/bin/bison"
+
+
+@pytest.mark.parametrize(
+    ("system", "executable", "expected"),
+    [
+        ("Darwin", "/usr/bin/bison", "found Bison 2.3 at /usr/bin/bison"),
+        ("Linux", None, "system package manager"),
+    ],
+)
+def test_serpent_bison_error_is_actionable(
+    system: str,
+    executable: str | None,
+    expected: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("evm.toolchain.installation.system_platform.system", lambda: system)
+    monkeypatch.setattr(
+        "evm.toolchain.installation.shutil.which",
+        lambda name: executable if name == "bison" else None,
+    )
+    monkeypatch.setattr(
+        "evm.toolchain.installation.subprocess.run",
+        lambda command, **options: SimpleNamespace(
+            returncode=0,
+            stdout="bison (GNU Bison) 2.3\n",
+            stderr="",
+        ),
+    )
+
+    message = installation_module.serpent_bison_requirement_error()
+
+    assert expected in message
+
+
+def test_homebrew_bison_install_is_explicit_and_verified(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+    monkeypatch.setattr("evm.toolchain.installation.system_platform.system", lambda: "Darwin")
+    monkeypatch.setattr(
+        "evm.toolchain.installation.shutil.which",
+        lambda name: "/opt/homebrew/bin/brew" if name == "brew" else None,
+    )
+    monkeypatch.setattr(
+        "evm.toolchain.installation._run_install_command",
+        lambda command, **options: commands.append(command),
+    )
+    monkeypatch.setattr(
+        "evm.toolchain.installation.find_serpent_bison",
+        lambda: "/opt/homebrew/opt/bison/bin/bison",
+    )
+
+    executable = install_bison_with_homebrew()
+
+    assert executable == "/opt/homebrew/opt/bison/bin/bison"
+    assert commands == [["/opt/homebrew/bin/brew", "install", "bison"]]
+
+
+def test_homebrew_bison_install_requires_homebrew(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("evm.toolchain.installation.system_platform.system", lambda: "Darwin")
+    monkeypatch.setattr("evm.toolchain.installation.shutil.which", lambda name: None)
+
+    with pytest.raises(EvmError, match=r"GNU Bison 3\.7"):
+        install_bison_with_homebrew()
+
+
+def test_homebrew_bison_install_verifies_the_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("evm.toolchain.installation.system_platform.system", lambda: "Darwin")
+    monkeypatch.setattr(
+        "evm.toolchain.installation.shutil.which",
+        lambda name: "/opt/homebrew/bin/brew" if name == "brew" else None,
+    )
+    monkeypatch.setattr(
+        "evm.toolchain.installation._run_install_command",
+        lambda command, **options: None,
+    )
+    monkeypatch.setattr("evm.toolchain.installation.find_serpent_bison", lambda: None)
+
+    with pytest.raises(EvmError, match="could not find GNU Bison"):
+        install_bison_with_homebrew()
+
+
 def test_serpent_install_creates_isolated_python_environment(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -557,15 +801,19 @@ def test_serpent_install_creates_isolated_python_environment(
     monkeypatch.setattr(
         "evm.toolchain.installation._find_serpent_python", lambda: "/tools/python3.13"
     )
+    monkeypatch.setattr("evm.toolchain.installation.find_serpent_bison", lambda: "/tools/bison")
 
-    def run(command: list[str], **options: object) -> SimpleNamespace:
+    build_environments: list[dict[str, str]] = []
+
+    def run_install(command: list[str], **options: object) -> None:
         if command[1:3] == ["-m", "venv"]:
             python = Path(command[3]) / "bin" / "python"
             python.parent.mkdir(parents=True)
             python.write_text("python")
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
+        if command[1:4] == ["-m", "pip", "install"]:
+            build_environments.append(options["environment"])
 
-    monkeypatch.setattr("evm.toolchain.installation.subprocess.run", run)
+    monkeypatch.setattr("evm.toolchain.installation._run_install_command", run_install)
 
     installation = install_toolchain(ToolchainSelector.parse(f"serpent@{revision}"), client=client)
 
@@ -573,7 +821,68 @@ def test_serpent_install_creates_isolated_python_environment(
     assert installation.version == "0.1.0"
     assert installation.revision == revision
     assert installation.executable.name == "python"
+    assert build_environments[0]["PATH"].startswith("/tools")
     assert list_installations() == (installation,)
+
+
+def test_uv_python_install_returns_verified_interpreter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_commands: list[list[str]] = []
+    monkeypatch.setattr(
+        "evm.toolchain.installation.shutil.which",
+        lambda name: "/tools/uv" if name == "uv" else None,
+    )
+    monkeypatch.setattr(
+        "evm.toolchain.installation._run_install_command",
+        lambda command, **options: install_commands.append(command),
+    )
+
+    def run(command: list[str], **options: object) -> SimpleNamespace:
+        if command[:3] == ["/tools/uv", "python", "find"]:
+            return SimpleNamespace(returncode=0, stdout="/managed/python3.13\n", stderr="")
+        if command == ["/managed/python3.13", "--version"]:
+            return SimpleNamespace(returncode=0, stdout="Python 3.13.7\n", stderr="")
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr("evm.toolchain.installation.subprocess.run", run)
+
+    executable = install_serpent_python_with_uv()
+
+    assert executable == "/managed/python3.13"
+    assert install_commands == [["/tools/uv", "python", "install", "3.13"]]
+
+
+def test_long_install_command_reports_heartbeat(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[InstallationProgress] = []
+
+    class Process:
+        returncode = 0
+
+        def __init__(self) -> None:
+            self.polls = 0
+
+        def communicate(self, timeout: int) -> tuple[str, str]:
+            self.polls += 1
+            if self.polls == 1:
+                raise installation_module.subprocess.TimeoutExpired("build", timeout)
+            return "done", ""
+
+    process = Process()
+    monkeypatch.setattr(installation_module.subprocess, "Popen", lambda *args, **kwargs: process)
+    monotonic = iter((10.0, 12.0))
+    monkeypatch.setattr(installation_module.time, "monotonic", lambda: next(monotonic))
+
+    installation_module._run_install_command(
+        ["build"],
+        progress=events.append,
+        progress_message="Building toolchain",
+    )
+
+    assert [event.completed for event in events] == [0, 2]
+    assert events[-1].message.endswith("2s elapsed")
 
 
 def test_liberty_install_bootstraps_exact_git_revision(
@@ -602,6 +911,56 @@ def test_liberty_install_bootstraps_exact_git_revision(
     assert installation.revision == revision
     assert installation.executable == installation.root / "target" / "bin" / "se"
     assert (installation.root / ".home").is_dir()
+
+
+def test_liberty_rejects_whitespace_store_before_checkout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    revision = "21b081378ec12798080128e7f39878d5d2097cb7"
+    monkeypatch.setenv("EVM_TOOLCHAIN_HOME", str(tmp_path / "Application Support"))
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        "evm.toolchain.installation._run_install_command",
+        lambda command, **options: commands.append(command),
+    )
+
+    with pytest.raises(EvmError, match="path containing whitespace"):
+        install_toolchain(ToolchainSelector.parse(f"liberty@{revision}"))
+
+    assert commands == []
+
+
+def test_liberty_failure_preserves_bootstrap_log(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    revision = "21b081378ec12798080128e7f39878d5d2097cb7"
+    store = tmp_path / "store"
+    monkeypatch.setenv("EVM_TOOLCHAIN_HOME", str(store))
+    monkeypatch.setattr(
+        "evm.toolchain.installation.shutil.which",
+        lambda name: f"/tools/{name}",
+    )
+
+    def fail_bootstrap(command: list[str], **options: object) -> None:
+        if command[0] != "bash":
+            return
+        root = Path(options["working_directory"])
+        log = root / "target" / "log" / "install-test.log"
+        log.parent.mkdir(parents=True)
+        log.write_text("bootstrap failed")
+        raise EvmError("bootstrap command failed")
+
+    monkeypatch.setattr("evm.toolchain.installation._run_install_command", fail_bootstrap)
+
+    with pytest.raises(EvmError, match="Full log:"):
+        install_toolchain(ToolchainSelector.parse(f"liberty@{revision}"))
+
+    preserved = tuple(store.glob("managed/liberty/*/*-install.log"))
+    assert len(preserved) == 1
+    assert preserved[0].read_text() == "bootstrap failed"
+    assert not (preserved[0].parent / current_toolchain_platform().identifier).exists()
 
 
 def test_catalog_reports_unknown_provider_and_missing_release() -> None:
@@ -673,6 +1032,91 @@ def test_install_gobo_downloads_verifies_and_reuses_store(
     assert installed.executable.is_file()
     assert installed.checksum is not None
     assert len([url for url in requests if url.endswith("gobo.tar.gz")]) == 1
+
+
+def test_install_reports_measurable_progress(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EVM_TOOLCHAIN_HOME", str(tmp_path / "store"))
+    monkeypatch.setenv("EVM_TOOLCHAIN_CACHE", str(tmp_path / "cache"))
+    archive = _toolchain_tar("gobo", "gobo/bin/gec", "Gobo Eiffel Compiler 26.06.30")
+    client = _gobo_install_client(archive)
+    events: list[InstallationProgress] = []
+
+    install_toolchain(
+        ToolchainSelector.parse("gobo"),
+        client=client,
+        platform=current_toolchain_platform("Linux", "x86_64"),
+        progress=events.append,
+    )
+
+    stages = [event.stage for event in events]
+    downloads = [event for event in events if event.stage == "download"]
+    assert stages[0] == "resolve"
+    assert {"download", "extract", "verify", "complete"} <= set(stages)
+    assert downloads[0].completed == 0
+    assert downloads[-1].completed == len(archive)
+    assert downloads[-1].total == len(archive)
+
+
+def test_progress_renderer_emits_stable_noninteractive_output(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    renderer = InstallationProgressRenderer()
+    renderer.interactive = False
+
+    renderer(InstallationProgress("download", "Downloading archive", 0, 1024))
+    renderer(InstallationProgress("download", "Downloading archive", 512, 1024))
+    renderer(InstallationProgress("download", "Downloading archive", 1024, 1024))
+    renderer(InstallationProgress("bootstrap", "Building", 0))
+    renderer(InstallationProgress("bootstrap", "Building · 1s elapsed", 1))
+    renderer(InstallationProgress("complete", "Installed"))
+
+    output = capsys.readouterr().out
+    assert "0%" in output
+    assert "100%" in output
+    assert "50%" not in output
+    assert output.count("Building") == 1
+    assert "✓ Installed" in output
+
+
+def test_progress_renderer_updates_interactive_activity(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    renderer = InstallationProgressRenderer()
+    renderer.interactive = True
+
+    renderer(InstallationProgress("download", "Downloading archive", 2048))
+    renderer(InstallationProgress("bootstrap", "Building", 1))
+    renderer(InstallationProgress("extract", "Extracting"))
+    renderer(InstallationProgress("download", "Downloading archive", 1, 2))
+    renderer.finish()
+
+    output = capsys.readouterr().out
+    assert "2.0 KiB" in output
+    assert "Building" in output
+    assert "Extracting" in output
+    assert "50%" in output
+    assert output.endswith("\n")
+
+
+def test_install_rejects_broken_existing_distribution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EVM_TOOLCHAIN_HOME", str(tmp_path / "store"))
+    monkeypatch.setenv("EVM_TOOLCHAIN_CACHE", str(tmp_path / "cache"))
+    archive = _toolchain_tar("gobo", "gobo/bin/gec", "Gobo Eiffel Compiler 26.06.30")
+    client = _gobo_install_client(archive)
+    selector = ToolchainSelector.parse("gobo")
+    platform = current_toolchain_platform("Linux", "x86_64")
+    installed = install_toolchain(selector, client=client, platform=platform)
+    installed.executable.write_text("broken")
+    installed.executable.chmod(0o644)
+
+    with pytest.raises(EvmError, match=r"existing installation.*is not usable"):
+        install_toolchain(selector, client=client, platform=platform)
 
 
 def test_offline_install_uses_verified_cache(
@@ -772,7 +1216,9 @@ def test_install_accepts_zip_distribution(
     monkeypatch.setenv("EVM_TOOLCHAIN_CACHE", str(tmp_path / "cache"))
     stream = io.BytesIO()
     with zipfile.ZipFile(stream, "w") as archive:
-        archive.writestr("gobo/bin/gec", "gobo 26.06.30")
+        executable = zipfile.ZipInfo("gobo/bin/gec")
+        executable.external_attr = 0o755 << 16
+        archive.writestr(executable, "#!/bin/sh\necho 'gobo 26.06.30'\n")
     platform = current_toolchain_platform("Linux", "x86_64")
     client = _gobo_install_client(stream.getvalue(), filename="gobo-linux-x86_64-26.06.30.zip")
 
@@ -780,7 +1226,7 @@ def test_install_accepts_zip_distribution(
         ToolchainSelector.parse("gobo"), client=client, platform=platform
     )
 
-    assert installation.executable.read_text() == "gobo 26.06.30"
+    assert "gobo 26.06.30" in installation.executable.read_text()
 
 
 def test_locked_installation_rejects_another_platform() -> None:
@@ -1079,6 +1525,149 @@ def test_toolchain_install_cli_validates_modes(arguments: list[str], message: st
     assert message in result.output
 
 
+def test_toolchain_install_cli_offers_uv_python_for_serpent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    installation = _managed_installation(tmp_path / "store", "serpent", "0.1.0", "abc1234")
+    calls: list[str] = []
+    monkeypatch.setattr("evm.toolchain.cli.find_serpent_bison", lambda: "/tools/bison")
+    monkeypatch.setattr("evm.toolchain.cli.find_serpent_python", lambda: None)
+    monkeypatch.setattr("evm.toolchain.cli.uv_can_install_serpent_python", lambda: True)
+    monkeypatch.setattr("evm.toolchain.cli._input_is_interactive", lambda: True)
+    monkeypatch.setattr(
+        "evm.toolchain.cli.install_serpent_python_with_uv",
+        lambda progress: calls.append("python") or "/uv/python3.13",
+    )
+    monkeypatch.setattr(
+        "evm.toolchain.cli.install_toolchain",
+        lambda selector, *, offline, progress: calls.append(str(selector)) or installation,
+    )
+
+    result = CliRunner().invoke(main, ["toolchain", "install", "serpent"], input="y\n")
+
+    assert result.exit_code == 0, result.output
+    assert "Install Python 3.13 with uv?" in result.output
+    assert calls == ["python", "serpent"]
+
+
+def test_toolchain_install_cli_prepares_bison_before_python(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    installation = _managed_installation(tmp_path / "store", "serpent", "0.1.0", "abc1234")
+    calls: list[str] = []
+    monkeypatch.setattr("evm.toolchain.cli.find_serpent_bison", lambda: None)
+    monkeypatch.setattr("evm.toolchain.cli.homebrew_can_install_bison", lambda: True)
+    monkeypatch.setattr("evm.toolchain.cli.find_serpent_python", lambda: None)
+    monkeypatch.setattr("evm.toolchain.cli.uv_can_install_serpent_python", lambda: True)
+    monkeypatch.setattr("evm.toolchain.cli._input_is_interactive", lambda: True)
+    monkeypatch.setattr(
+        "evm.toolchain.cli.install_bison_with_homebrew",
+        lambda progress: calls.append("bison") or "/homebrew/bison",
+    )
+    monkeypatch.setattr(
+        "evm.toolchain.cli.install_serpent_python_with_uv",
+        lambda progress: calls.append("python") or "/uv/python3.13",
+    )
+    monkeypatch.setattr(
+        "evm.toolchain.cli.install_toolchain",
+        lambda selector, *, offline, progress: calls.append("serpent") or installation,
+    )
+
+    result = CliRunner().invoke(
+        main,
+        ["toolchain", "install", "serpent"],
+        input="y\ny\n",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls == ["bison", "python", "serpent"]
+
+
+def test_toolchain_install_cli_checks_bison_before_python(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    python_checks: list[bool] = []
+    monkeypatch.setattr("evm.toolchain.cli.find_serpent_bison", lambda: None)
+    monkeypatch.setattr("evm.toolchain.cli.homebrew_can_install_bison", lambda: False)
+    monkeypatch.setattr(
+        "evm.toolchain.cli.find_serpent_python",
+        lambda: python_checks.append(True),
+    )
+    monkeypatch.setattr(
+        "evm.toolchain.cli.serpent_bison_requirement_error",
+        lambda: "Serpent requires GNU Bison 3.7 or newer",
+    )
+
+    result = CliRunner().invoke(main, ["toolchain", "install", "serpent"])
+
+    assert result.exit_code == 1
+    assert "GNU Bison 3.7" in result.output
+    assert python_checks == []
+
+
+def test_toolchain_install_cli_respects_declined_homebrew_install(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    installs: list[bool] = []
+    monkeypatch.setattr("evm.toolchain.cli.find_serpent_bison", lambda: None)
+    monkeypatch.setattr("evm.toolchain.cli.homebrew_can_install_bison", lambda: True)
+    monkeypatch.setattr("evm.toolchain.cli._input_is_interactive", lambda: True)
+    monkeypatch.setattr(
+        "evm.toolchain.cli.install_bison_with_homebrew",
+        lambda progress: installs.append(True),
+    )
+
+    result = CliRunner().invoke(
+        main,
+        ["toolchain", "install", "serpent"],
+        input="n\n",
+    )
+
+    assert result.exit_code == 1
+    assert "Serpent installation cancelled" in result.output
+    assert installs == []
+
+
+def test_toolchain_install_cli_does_not_install_bison_offline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("evm.toolchain.cli.find_serpent_bison", lambda: None)
+
+    result = CliRunner().invoke(main, ["toolchain", "install", "serpent", "--offline"])
+
+    assert result.exit_code == 1
+    assert "--offline prevents installing it with Homebrew" in result.output
+
+
+def test_toolchain_install_cli_never_prompts_for_python_in_ci(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("evm.toolchain.cli.find_serpent_bison", lambda: "/tools/bison")
+    monkeypatch.setattr("evm.toolchain.cli.find_serpent_python", lambda: None)
+    monkeypatch.setattr("evm.toolchain.cli.uv_can_install_serpent_python", lambda: True)
+    monkeypatch.setattr("evm.toolchain.cli._input_is_interactive", lambda: False)
+
+    result = CliRunner().invoke(main, ["toolchain", "install", "serpent"])
+
+    assert result.exit_code == 1
+    assert "run interactively" in result.output
+    assert "[y/N]" not in result.output
+
+
+def test_toolchain_install_cli_keeps_offline_mode_offline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("evm.toolchain.cli.find_serpent_bison", lambda: "/tools/bison")
+    monkeypatch.setattr("evm.toolchain.cli.find_serpent_python", lambda: None)
+
+    result = CliRunner().invoke(main, ["toolchain", "install", "serpent", "--offline"])
+
+    assert result.exit_code == 1
+    assert "--offline prevents installing it with uv" in result.output
+
+
 def test_toolchain_install_cli_installs_direct_and_project_locked(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1088,7 +1677,7 @@ def test_toolchain_install_cli_installs_direct_and_project_locked(
     installation = _managed_installation(tmp_path / "store", "gobo", "26.06", "26.06.30")
     direct_calls: list[str] = []
 
-    def install(selector: ToolchainSelector, *, offline: bool = False):
+    def install(selector: ToolchainSelector, *, offline: bool = False, progress=None):
         direct_calls.append(f"{selector}:{offline}")
         return installation
 
@@ -1098,7 +1687,7 @@ def test_toolchain_install_cli_installs_direct_and_project_locked(
 
     monkeypatch.setattr(
         "evm.toolchain.cli._install_project_toolchains",
-        lambda selected_project, *, locked, offline: (installation,),
+        lambda selected_project, *, locked, offline, progress: (installation,),
     )
     project_result = runner.invoke(
         main, ["toolchain", "install", "--project", "--locked", "--offline"]
@@ -1125,7 +1714,10 @@ def test_toolchain_use_cli_updates_and_optionally_installs(
         "evm.toolchain.cli.configure_project_toolchains",
         lambda selected_project, selectors: (proposed, LockFile("x", ())),
     )
-    monkeypatch.setattr("evm.toolchain.cli.install_toolchain", lambda selector: installation)
+    monkeypatch.setattr(
+        "evm.toolchain.cli.install_toolchain",
+        lambda selector, *, progress: installation,
+    )
 
     result = CliRunner().invoke(main, ["toolchain", "use", "gobo@latest", "--install"])
 

@@ -267,7 +267,13 @@ Options:
 
 Pass one or more exact selectors directly, or use `--project`. `--locked`
 requires `--project` and installs the platform artifacts recorded in the lock
-file. Reinstalling an already verified distribution is idempotent.
+file. Reinstalling an already verified distribution is idempotent. Installation
+shows download and build progress and registers a new distribution only after
+its compiler passes a smoke check. Serpent requires GNU Bison 3.7 or newer and
+Python 3.13 or newer. An interactive online invocation can separately ask to
+install missing Bison with Homebrew and missing Python with `uv`. Offline and
+non-interactive invocations never install prerequisites. On macOS EVM also
+finds Homebrew's keg-only Bison when it is not in `PATH`.
 
 ### `evm toolchain link`
 

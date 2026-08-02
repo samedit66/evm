@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import click
@@ -19,9 +20,17 @@ from evm.toolchain.commands import (
 )
 from evm.toolchain.compilers import compiler_adapter_names
 from evm.toolchain.installation import (
+    InstallationProgress,
     available_artifacts,
+    find_serpent_bison,
+    find_serpent_python,
+    homebrew_can_install_bison,
+    install_bison_with_homebrew,
     install_locked_toolchain,
+    install_serpent_python_with_uv,
     install_toolchain,
+    serpent_bison_requirement_error,
+    uv_can_install_serpent_python,
 )
 from evm.toolchain.store import (
     list_installations,
@@ -125,17 +134,26 @@ def toolchain_install_command(
         raise EvmError("SELECTOR and --project are mutually exclusive")
     if locked and not project_mode:
         raise EvmError("--locked requires --project")
-    if project_mode:
-        project = _require_project(load_project_context())
-        installed = _install_project_toolchains(project, locked=locked, offline=offline)
-        record_installed_toolchains(project, installed)
-    else:
-        if not selectors:
-            raise EvmError("provide at least one SELECTOR or use --project")
-        installed = tuple(
-            install_toolchain(ToolchainSelector.parse(value), offline=offline)
-            for value in selectors
-        )
+    progress = InstallationProgressRenderer()
+    try:
+        if project_mode:
+            project = _require_project(load_project_context())
+            _prepare_project_serpent_installation(project, locked, offline, progress)
+            installed = _install_project_toolchains(
+                project, locked=locked, offline=offline, progress=progress
+            )
+            record_installed_toolchains(project, installed)
+        else:
+            if not selectors:
+                raise EvmError("provide at least one SELECTOR or use --project")
+            parsed = tuple(ToolchainSelector.parse(value) for value in selectors)
+            _prepare_serpent_installation(parsed, offline, progress)
+            installed = tuple(
+                install_toolchain(selector, offline=offline, progress=progress)
+                for selector in parsed
+            )
+    finally:
+        progress.finish()
     for installation in installed:
         click.echo(f"Installed {installation.identity} at {installation.root}")
 
@@ -152,11 +170,17 @@ def toolchain_use_command(selectors: tuple[str, ...], install_missing: bool) -> 
     click.echo(f"Updated {proposed.manifest_path}")
     click.echo(f"Updated {proposed.directory / LOCK_NAME}")
     if install_missing:
+        progress = InstallationProgressRenderer()
+        configured = project_toolchain_selectors(proposed)
         installed = []
-        for selector in project_toolchain_selectors(proposed):
-            installation = install_toolchain(selector)
-            installed.append(installation)
-            click.echo(f"Installed {installation.identity} at {installation.root}")
+        try:
+            _prepare_serpent_installation(configured, False, progress)
+            for selector in configured:
+                installation = install_toolchain(selector, progress=progress)
+                installed.append(installation)
+                click.echo(f"Installed {installation.identity} at {installation.root}")
+        finally:
+            progress.finish()
         record_installed_toolchains(proposed, tuple(installed))
 
 
@@ -245,6 +269,7 @@ def _install_project_toolchains(
     *,
     locked: bool,
     offline: bool,
+    progress: InstallationProgressRenderer | None = None,
 ) -> tuple[ToolchainInstallation, ...]:
     if locked:
         lock = load_lock(project.directory / LOCK_NAME)
@@ -252,11 +277,165 @@ def _install_project_toolchains(
         locked_toolchains = locked_toolchains_for_current_platform(lock)
         if not locked_toolchains:
             raise EvmError("Eiffel.lock has no toolchain artifact for the current platform")
-        return tuple(install_locked_toolchain(item, offline=offline) for item in locked_toolchains)
+        return tuple(
+            install_locked_toolchain(item, offline=offline, progress=progress)
+            for item in locked_toolchains
+        )
     return tuple(
-        install_toolchain(selector, offline=offline)
+        install_toolchain(selector, offline=offline, progress=progress)
         for selector in project_toolchain_selectors(project)
     )
+
+
+class InstallationProgressRenderer:
+    def __init__(self) -> None:
+        self.interactive = click.get_text_stream("stdout").isatty()
+        self.last_stage: str | None = None
+        self.activity_line_open = False
+
+    def __call__(self, progress: InstallationProgress) -> None:
+        if progress.completed is not None and progress.total is not None:
+            self._render_download(progress)
+            return
+        if progress.completed is not None:
+            self._render_activity(progress)
+            return
+        self._finish_activity_line()
+        if not self.interactive and progress.stage == self.last_stage:
+            return
+        click.echo(f"{_progress_mark(progress.stage)} {progress.message}")
+        self.last_stage = progress.stage
+
+    def _render_download(self, progress: InstallationProgress) -> None:
+        total = progress.total or 0
+        complete = progress.completed or 0
+        if not self.interactive and complete not in {0, total}:
+            return
+        ratio = min(1.0, complete / total) if total else 0.0
+        width = 24
+        filled = round(width * ratio)
+        bar = "█" * filled + "░" * (width - filled)
+        line = (
+            f"↓ {progress.message} [{bar}] {ratio:.0%} "
+            f"{_format_bytes(complete)}/{_format_bytes(total)}"
+        )
+        line_complete = not self.interactive or complete >= total
+        click.echo(f"\r{line}", nl=line_complete)
+        self.activity_line_open = not line_complete
+        self.last_stage = progress.stage
+
+    def _render_activity(self, progress: InstallationProgress) -> None:
+        message = progress.message
+        if progress.stage == "download":
+            message = f"{message} · {_format_bytes(progress.completed or 0)}"
+        if self.interactive:
+            click.echo(f"\r→ {message}", nl=False)
+            self.activity_line_open = True
+        elif progress.stage != self.last_stage:
+            click.echo(f"→ {message}")
+        self.last_stage = progress.stage
+
+    def _finish_activity_line(self) -> None:
+        if self.activity_line_open:
+            click.echo()
+            self.activity_line_open = False
+
+    def finish(self) -> None:
+        self._finish_activity_line()
+
+
+def _progress_mark(stage: str) -> str:
+    return "✓" if stage == "complete" else "→"
+
+
+def _format_bytes(size: int) -> str:
+    value = float(size)
+    for unit in ("B", "KiB", "MiB", "GiB"):
+        if value < 1024 or unit == "GiB":
+            return f"{value:.1f} {unit}"
+        value /= 1024
+    raise AssertionError("unreachable byte unit")
+
+
+def _prepare_project_serpent_installation(
+    project: Project,
+    locked: bool,
+    offline: bool,
+    progress: InstallationProgressRenderer,
+) -> None:
+    if locked:
+        lock = load_lock(project.directory / LOCK_NAME)
+        ensure_lock_matches(project, lock)
+        selectors = tuple(
+            ToolchainSelector(item.provider, item.revision)
+            for item in locked_toolchains_for_current_platform(lock)
+        )
+    else:
+        selectors = project_toolchain_selectors(project)
+    _prepare_serpent_installation(selectors, offline, progress)
+
+
+def _prepare_serpent_installation(
+    selectors: tuple[ToolchainSelector, ...],
+    offline: bool,
+    progress: InstallationProgressRenderer,
+) -> None:
+    if not any(selector.provider == "serpent" for selector in selectors):
+        return
+    _prepare_serpent_bison(offline, progress)
+    _prepare_serpent_python(offline, progress)
+
+
+def _prepare_serpent_bison(
+    offline: bool,
+    progress: InstallationProgressRenderer,
+) -> None:
+    if find_serpent_bison() is not None:
+        return
+    if offline:
+        raise EvmError(
+            "Serpent requires GNU Bison 3.7 or newer; --offline prevents installing it "
+            "with Homebrew"
+        )
+    if not homebrew_can_install_bison():
+        raise EvmError(serpent_bison_requirement_error())
+    if not _input_is_interactive():
+        raise EvmError(serpent_bison_requirement_error())
+    if not click.confirm(
+        "Serpent requires GNU Bison 3.7 or newer. Install it with Homebrew?",
+        default=False,
+    ):
+        raise EvmError("GNU Bison was not installed; Serpent installation cancelled")
+    install_bison_with_homebrew(progress)
+
+
+def _prepare_serpent_python(
+    offline: bool,
+    progress: InstallationProgressRenderer,
+) -> None:
+    if find_serpent_python() is not None:
+        return
+    if offline:
+        raise EvmError(
+            "Serpent requires Python 3.13 or newer; --offline prevents installing it with uv"
+        )
+    if not uv_can_install_serpent_python():
+        raise EvmError("Serpent requires Python 3.13 or newer; install Python 3.13 and retry")
+    if not _input_is_interactive():
+        raise EvmError(
+            "Serpent requires Python 3.13 or newer; run interactively to let EVM install "
+            "it with uv, or install Python 3.13 manually"
+        )
+    if not click.confirm(
+        "Serpent requires Python 3.13 or newer. Install Python 3.13 with uv?",
+        default=False,
+    ):
+        raise EvmError("Python 3.13 was not installed; Serpent installation cancelled")
+    install_serpent_python_with_uv(progress)
+
+
+def _input_is_interactive() -> bool:
+    return sys.stdin.isatty()
 
 
 def _verification_installations(

@@ -45,10 +45,20 @@ def user_toolchain_root(environment: Mapping[str, str] | None = None) -> Path:
             raise EvmError("LOCALAPPDATA is required to locate the EVM toolchain store")
         return Path(base) / "evm" / "toolchains"
     if _is_macos():
-        return Path.home() / "Library" / "Application Support" / "evm" / "toolchains"
+        return Path.home() / ".local" / "share" / "evm" / "toolchains"
     data_home = current_environment.get("XDG_DATA_HOME")
     base = Path(data_home).expanduser() if data_home else Path.home() / ".local" / "share"
     return base / "evm" / "toolchains"
+
+
+def legacy_toolchain_roots(
+    environment: Mapping[str, str] | None = None,
+) -> tuple[Path, ...]:
+    current_environment = os.environ if environment is None else environment
+    if current_environment.get("EVM_TOOLCHAIN_HOME") or not _is_macos():
+        return ()
+    legacy = Path.home() / "Library" / "Application Support" / "evm" / "toolchains"
+    return (legacy,)
 
 
 def managed_installation_directory(
@@ -92,13 +102,14 @@ def register_linked_installation(installation: ToolchainInstallation) -> None:
 
 
 def list_installations(root: Path | None = None) -> tuple[ToolchainInstallation, ...]:
-    store = root or user_toolchain_root()
     installations: list[ToolchainInstallation] = []
-    managed = store / "managed"
-    if managed.is_dir():
-        for metadata_path in sorted(managed.glob("*/*/*/installation.toml")):
-            installations.append(_load_installation(metadata_path))
-    installations.extend(_load_linked_installations(store / _LINKED_FILE))
+    stores = (root,) if root is not None else (user_toolchain_root(), *legacy_toolchain_roots())
+    for store in stores:
+        managed = store / "managed"
+        if managed.is_dir():
+            for metadata_path in sorted(managed.glob("*/*/*/installation.toml")):
+                installations.append(_load_installation(metadata_path))
+        installations.extend(_load_linked_installations(store / _LINKED_FILE))
     return tuple(sorted(installations, key=_installation_sort_key, reverse=True))
 
 
@@ -145,12 +156,12 @@ def remove_installation(installation: ToolchainInstallation) -> None:
         _remove_linked_registration(installation)
         _remove_gobo_alias(installation)
         return
-    managed_root = user_toolchain_root() / "managed"
     installation_directory = installation.root.parent.resolve()
-    try:
-        installation_directory.relative_to(managed_root.resolve())
-    except ValueError as error:
-        raise EvmError(f"refusing to remove unmanaged path: {installation_directory}") from error
+    managed_roots = tuple(
+        root / "managed" for root in (user_toolchain_root(), *legacy_toolchain_roots())
+    )
+    if not any(_is_below(installation_directory, root) for root in managed_roots):
+        raise EvmError(f"refusing to remove unmanaged path: {installation_directory}")
     _remove_gobo_alias(installation)
     shutil.rmtree(installation_directory)
 
@@ -236,7 +247,11 @@ def verify_installation(installation: ToolchainInstallation) -> tuple[str, ...]:
             gobo_shell_root(installation)
         except EvmError as error:
             diagnostics.append(str(error))
-    if installation.provider in {"liberty", "serpent"}:
+    if installation.provider == "serpent":
+        diagnostics.extend(_verify_serpent(installation))
+        return tuple(diagnostics)
+    if installation.provider == "liberty":
+        diagnostics.extend(_verify_liberty(installation))
         return tuple(diagnostics)
     try:
         detected_version = _probe_version(installation.provider, installation.executable)
@@ -248,6 +263,60 @@ def verify_installation(installation: ToolchainInstallation) -> tuple[str, ...]:
                 f"compiler reports version {detected_version}, expected {installation.revision}"
             )
     return tuple(diagnostics)
+
+
+def _verify_serpent(installation: ToolchainInstallation) -> tuple[str, ...]:
+    return _run_health_command(
+        [
+            str(installation.executable),
+            "-c",
+            (
+                "import os; from serpent.resources import get_resource_path; "
+                "parser = get_resource_path('build/eiffelp'); "
+                "assert parser.is_file() and os.access(parser, os.X_OK)"
+            ),
+        ],
+        toolchain_environment(installation),
+        "Serpent Python environment is not usable",
+    )
+
+
+def _verify_liberty(installation: ToolchainInstallation) -> tuple[str, ...]:
+    if _contains_whitespace(installation.root):
+        return (
+            f"Liberty installation path contains whitespace and is not supported: "
+            f"{installation.root}",
+        )
+    configuration = installation.root / ".home" / ".config" / "liberty-eiffel"
+    if not configuration.exists():
+        return (f"Liberty managed configuration is missing: {configuration}",)
+    return _run_health_command(
+        [str(installation.executable), "-version"],
+        toolchain_environment(installation),
+        "Liberty compiler is not usable in its managed environment",
+    )
+
+
+def _run_health_command(
+    command: list[str],
+    environment: Mapping[str, str],
+    failure_message: str,
+) -> tuple[str, ...]:
+    try:
+        completed = subprocess.run(
+            command,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=_PROBE_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return (f"{failure_message}: {error}",)
+    if completed.returncode == 0:
+        return ()
+    details = completed.stderr.strip() or completed.stdout.strip() or "no diagnostic output"
+    return (f"{failure_message}: {details}",)
 
 
 def _is_macos() -> bool:
@@ -419,22 +488,37 @@ def _toolchain_path_entries(
 def _installation_sort_key(installation: ToolchainInstallation) -> tuple[object, ...]:
     version = tuple(int(part) for part in installation.revision.split(".") if part.isdigit())
     managed_priority = installation.kind is InstallationKind.MANAGED
-    return installation.provider, version, managed_priority
+    canonical_priority = _is_below(
+        installation.root.parent.resolve(), user_toolchain_root() / "managed"
+    )
+    return installation.provider, version, managed_priority, canonical_priority
+
+
+def _is_below(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root.resolve())
+    except ValueError:
+        return False
+    return True
 
 
 def _remove_linked_registration(installation: ToolchainInstallation) -> None:
-    path = user_toolchain_root() / _LINKED_FILE
-    document = _load_document(path)
-    entries = document.get("toolchain", [])
-    retained = [
-        item
-        for item in entries
-        if not isinstance(item, Mapping) or item.get("root") != str(installation.root)
-    ]
-    if len(retained) == len(entries):
-        raise EvmError(f"linked toolchain is not registered: {installation.root}")
-    document["toolchain"] = retained
-    atomic_write(path, tomlkit.dumps(document).encode())
+    stores = (user_toolchain_root(), *legacy_toolchain_roots())
+    for store in stores:
+        path = store / _LINKED_FILE
+        document = _load_document(path)
+        entries = document.get("toolchain", [])
+        retained = [
+            item
+            for item in entries
+            if not isinstance(item, Mapping) or item.get("root") != str(installation.root)
+        ]
+        if len(retained) == len(entries):
+            continue
+        document["toolchain"] = retained
+        atomic_write(path, tomlkit.dumps(document).encode())
+        return
+    raise EvmError(f"linked toolchain is not registered: {installation.root}")
 
 
 def _gobo_alias_path(installation: ToolchainInstallation) -> Path:

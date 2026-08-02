@@ -57,9 +57,13 @@ Managed distributions are downloaded, checksum-verified, and atomically
 materialized. Repeating the installation reuses the verified copy.
 
 The user store follows platform conventions and can be overridden with
-`EVM_TOOLCHAIN_HOME`. It is outside the project: Eiffel package dependencies
-remain project-local below `.evm/`, while one compiler installation can serve
-multiple projects.
+`EVM_TOOLCHAIN_HOME`. On macOS the canonical store is
+`~/.local/share/evm/toolchains`, whose whitespace-free path is compatible with
+upstream bootstrap scripts. EVM continues to discover and remove installations
+created by older releases below `~/Library/Application Support`, but does not
+put new installations there. The store is outside the project: Eiffel package
+dependencies remain project-local below `.evm/`, while one compiler
+installation can serve multiple projects.
 
 Offline installation uses only the verified download cache:
 
@@ -74,10 +78,30 @@ $ evm toolchain install serpent@c95ab517a5914ebc9e8d2ccf767a6d2e6caf49f2
 $ evm toolchain install liberty@21b081378ec12798080128e7f39878d5d2097cb7
 ```
 
-Serpent needs Python 3.13 or newer, `make`, GCC, Flex, Bison, and a JDK. EVM
-installs it into an isolated virtual environment and compiles to JVM class
-files. Liberty needs Git, Bash, GCC, and G++; its bootstrap remains inside the
-managed checkout. Liberty cannot be newly installed offline.
+Serpent needs Python 3.13 or newer, `make`, GCC, Flex, GNU Bison 3.7 or newer,
+and a JDK. macOS ships an incompatible Bison 2.3. EVM also looks for Homebrew's
+keg-only Bison outside `PATH`; if it is absent, an interactive online session
+can offer to run `brew install bison`. If no compatible Python is installed and
+`uv` is available, EVM separately offers to install Python 3.13 with `uv`. Each
+system change requires explicit confirmation. Offline and non-interactive
+sessions never prompt or install prerequisites and instead print an actionable
+error. The selected Bison directory is added only to the Serpent build process
+environment. Serpent is installed into an isolated virtual environment and
+compiles to JVM class files.
+
+Liberty needs Git, Bash, GCC, and G++; its bootstrap remains inside the managed
+checkout and can take several minutes. The checkout may approach 1 GiB because
+Liberty retains generated C sources, object files, binaries, and several
+self-hosting bootstrap stages alongside its source and test trees. Liberty
+cannot be newly installed offline. Its upstream bootstrap script is not safe
+when the installation path contains whitespace, so EVM rejects such a custom
+`EVM_TOOLCHAIN_HOME` before downloading and suggests a safe path.
+
+Installation reports catalog resolution, downloads, cache reuse, extraction,
+bootstrap, and verification. Downloads with a known size use a byte progress
+bar; long builds show elapsed time. In redirected or CI output EVM prints stable
+stage lines instead of terminal animation. A toolchain is registered only after
+its compiler or managed runtime passes an installation smoke check.
 
 ## Link an existing installation
 
