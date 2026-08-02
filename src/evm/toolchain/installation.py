@@ -82,20 +82,37 @@ def available_artifacts(
     provider: str,
     client: httpx.Client | None = None,
     platform: ToolchainPlatform | None = None,
+    progress: ProgressReporter | None = None,
 ) -> tuple[ToolchainArtifact, ...]:
     current_platform = platform or current_toolchain_platform()
+    _report(progress, "catalog", f"Checking {provider} releases", 0)
     if provider == "liberty":
-        return (_liberty_artifact("latest", current_platform),)
+        artifacts = (_liberty_artifact("latest", current_platform),)
+        _report(progress, "catalog", f"Checked {provider} releases", 1)
+        return artifacts
     with _catalog_client(client) as catalog:
         if provider == "gobo":
-            return _gobo_artifacts(catalog, current_platform)
-        if provider == "ise":
-            return _eiffel_artifacts(catalog, current_platform)
-        if provider == "serpent":
-            return (_serpent_artifact(catalog, current_platform),)
-    raise EvmError(
-        f"unknown toolchain provider {provider!r}; known providers: ise, gobo, serpent, liberty"
-    )
+            artifacts = _gobo_artifacts(catalog, current_platform)
+        elif provider == "ise":
+            artifacts = _eiffel_artifacts(catalog, current_platform)
+        elif provider == "serpent":
+            artifacts = (_serpent_artifact(catalog, current_platform),)
+        else:
+            raise EvmError(
+                f"unknown toolchain provider {provider!r}; "
+                "known providers: ise, gobo, serpent, liberty"
+            )
+        available = (
+            artifacts
+            if provider == "ise"
+            else tuple(
+                artifact
+                for artifact in artifacts
+                if _artifact_url_is_available(catalog, artifact.url)
+            )
+        )
+    _report(progress, "catalog", f"Checked {provider} releases", 1)
+    return available
 
 
 def resolve_artifact(
@@ -441,19 +458,46 @@ def _eiffel_artifacts(
         version = _script_value(script, f"ISE_MAJOR_MINOR_{suffix}")
         build = _script_value(script, f"ISE_BUILD_{suffix}")
         revision = f"{version}.{build}"
-        filename = f"Eiffel_{version}_rev_{build}-{platform.ise_platform}.tar.bz2"
+        filename = _eiffel_archive_filename(version, build, platform)
         if channel == "stable":
-            url = f"{_EIFFEL_CDN_URL}/{version}/{build}/{filename}"
+            urls = (
+                f"{_EIFFEL_CDN_URL}/{version}/{build}/{filename}",
+                f"{_EIFFEL_ARCHIVE_URL}/{version}/{filename}",
+            )
         elif channel == "beta":
-            url = f"https://ftp.eiffel.com/pub/beta/{version}/{filename}"
+            urls = (f"https://ftp.eiffel.com/pub/beta/{version}/{filename}",)
         else:
-            url = f"https://ftp.eiffel.com/pub/beta/nightly/{filename}"
+            urls = (f"https://ftp.eiffel.com/pub/beta/nightly/{filename}",)
+        url = next(
+            (candidate for candidate in urls if _artifact_url_is_available(client, candidate)), None
+        )
+        if url is None:
+            continue
         artifact = ToolchainArtifact(
             "ise", version, revision, platform, url, filename, channel=channel
         )
         if artifact not in artifacts:
             artifacts.append(artifact)
     return tuple(artifacts)
+
+
+def _eiffel_archive_filename(
+    version: str,
+    build: str,
+    platform: ToolchainPlatform,
+) -> str:
+    extension = ".7z" if platform.operating_system == "windows" else ".tar.bz2"
+    return f"Eiffel_{version}_rev_{build}-{platform.ise_platform}{extension}"
+
+
+def _artifact_url_is_available(client: httpx.Client, url: str) -> bool:
+    try:
+        with client.stream("GET", url) as response:
+            response.raise_for_status()
+            next(response.iter_bytes(1), b"")
+        return True
+    except httpx.HTTPError:
+        return False
 
 
 def _script_value(script: str, name: str) -> str:

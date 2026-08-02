@@ -1,6 +1,6 @@
 UV_RUN := uv run --frozen
 
-.PHONY: sync format lint test coverage check ci install-hooks pre-commit
+.PHONY: sync format lint test test-network coverage check ci install-hooks pre-commit
 
 sync:
 	uv sync --all-groups
@@ -15,6 +15,9 @@ lint:
 
 test:
 	$(UV_RUN) pytest -m "not network and not toolchain"
+
+test-network:
+	$(UV_RUN) pytest -m network
 
 coverage:
 	$(UV_RUN) pytest -m "not network and not toolchain" \

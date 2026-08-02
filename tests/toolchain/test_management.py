@@ -771,6 +771,93 @@ def test_eiffel_catalog_resolves_channels_and_exact_revision() -> None:
     assert exact.url.endswith("/25.12/98922/Eiffel_25.12_rev_98922-linux-x86-64.tar.bz2")
 
 
+def test_eiffel_catalog_uses_downloadable_windows_archive() -> None:
+    script = "\n".join(
+        (
+            "ISE_MAJOR_MINOR_LATEST=25.12",
+            "ISE_BUILD_LATEST=98922",
+            "ISE_MAJOR_MINOR_BETA=25.12",
+            "ISE_BUILD_BETA=98922",
+            "ISE_MAJOR_MINOR_NIGHTLY=25.12",
+            "ISE_BUILD_NIGHTLY=98922",
+        )
+    )
+    requests: list[str] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        requests.append(str(request.url))
+        if request.url.path.endswith("install.sh"):
+            return httpx.Response(200, text=script)
+        if request.url.path.endswith("win64.7z"):
+            return httpx.Response(200, content=b"7z")
+        return httpx.Response(404)
+
+    client = httpx.Client(transport=httpx.MockTransport(handle))
+    platform = current_toolchain_platform("Windows", "AMD64")
+
+    artifacts = available_artifacts("ise", client, platform)
+
+    assert artifacts
+    assert all(artifact.filename.endswith("-win64.7z") for artifact in artifacts)
+    assert not any("win64.tar.bz2" in url for url in requests)
+
+
+def test_eiffel_catalog_uses_archive_fallback_for_missing_stable_cdn() -> None:
+    script = "\n".join(
+        (
+            "ISE_MAJOR_MINOR_LATEST=25.12",
+            "ISE_BUILD_LATEST=98922",
+            "ISE_MAJOR_MINOR_BETA=25.12",
+            "ISE_BUILD_BETA=98922",
+            "ISE_MAJOR_MINOR_NIGHTLY=25.12",
+            "ISE_BUILD_NIGHTLY=98922",
+        )
+    )
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("install.sh"):
+            return httpx.Response(200, text=script)
+        if request.url.host == "www.eiffel.com":
+            return httpx.Response(404)
+        if request.url.host == "ftp.eiffel.com" and "/pub/download/" in request.url.path:
+            return httpx.Response(200, content=b"archive")
+        return httpx.Response(404)
+
+    client = httpx.Client(transport=httpx.MockTransport(handle))
+    platform = current_toolchain_platform("Linux", "x86_64")
+
+    artifacts = available_artifacts("ise", client, platform)
+
+    assert [artifact.channel for artifact in artifacts] == ["stable"]
+    assert artifacts[0].url.startswith("https://ftp.eiffel.com/pub/download/")
+
+
+def test_eiffel_catalog_omits_urls_that_cannot_be_downloaded() -> None:
+    script = "\n".join(
+        (
+            "ISE_MAJOR_MINOR_LATEST=25.12",
+            "ISE_BUILD_LATEST=98922",
+            "ISE_MAJOR_MINOR_BETA=26.01",
+            "ISE_BUILD_BETA=100001",
+            "ISE_MAJOR_MINOR_NIGHTLY=26.01",
+            "ISE_BUILD_NIGHTLY=100002",
+        )
+    )
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("install.sh"):
+            return httpx.Response(200, text=script)
+        if "/nightly/" in request.url.path:
+            return httpx.Response(200, content=b"nightly")
+        return httpx.Response(404)
+
+    client = httpx.Client(transport=httpx.MockTransport(handle))
+
+    artifacts = available_artifacts("ise", client, current_toolchain_platform("Linux", "x86_64"))
+
+    assert [artifact.channel for artifact in artifacts] == ["nightly"]
+
+
 def test_serpent_catalog_resolves_latest_and_exact_commit() -> None:
     revision = "c95ab517a5914ebc9e8d2ccf767a6d2e6caf49f2"
     platform = current_toolchain_platform("Linux", "x86_64")
@@ -1202,7 +1289,7 @@ def test_install_gobo_downloads_verifies_and_reuses_store(
     assert installed == reused
     assert installed.executable.is_file()
     assert installed.checksum is not None
-    assert len([url for url in requests if url.endswith("gobo.tar.gz")]) == 1
+    assert len([url for url in requests if url.endswith("gobo.tar.gz")]) == 3
 
 
 def test_install_reports_measurable_progress(
@@ -1651,8 +1738,13 @@ def test_toolchain_cli_lists_available_releases_in_text_and_json(
     )
     calls: list[str] = []
 
-    def available(provider: str) -> tuple[ToolchainArtifact, ...]:
+    def available(
+        provider: str,
+        progress: installation_module.ProgressReporter | None = None,
+    ) -> tuple[ToolchainArtifact, ...]:
         calls.append(provider)
+        if progress is not None:
+            progress(InstallationProgress("catalog", f"Checking {provider} releases", 0))
         return (artifact,) if provider == "gobo" else ()
 
     monkeypatch.setattr("evm.toolchain.cli.available_artifacts", available)
@@ -1662,6 +1754,8 @@ def test_toolchain_cli_lists_available_releases_in_text_and_json(
     json_result = runner.invoke(main, ["toolchain", "list", "gobo", "--available", "--json"])
 
     assert "gobo@26.07\tnightly" in text_result.output
+    assert "Checking ise releases" in text_result.output
+    assert "Found 1 downloadable toolchain release" in text_result.output
     assert json.loads(json_result.output)["toolchains"][0]["revision"] == "26.07.06"
     assert calls == ["ise", "gobo", "serpent", "liberty", "gobo"]
 

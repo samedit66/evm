@@ -74,11 +74,18 @@ def toolchain_list_command(
 
 def _list_available_toolchains(provider: str | None, output_json: bool) -> None:
     providers = (provider,) if provider else compiler_adapter_names()
-    artifacts = tuple(
-        artifact
-        for selected_provider in providers
-        for artifact in available_artifacts(selected_provider)
-    )
+    progress = InstallationProgressRenderer()
+    try:
+        artifacts = tuple(
+            artifact
+            for selected_provider in providers
+            for artifact in available_artifacts(
+                selected_provider,
+                progress=None if output_json else progress,
+            )
+        )
+    finally:
+        progress.finish()
     if output_json:
         click.echo(
             json.dumps(
@@ -92,6 +99,7 @@ def _list_available_toolchains(provider: str | None, output_json: bool) -> None:
             f"{artifact.provider}@{artifact.version}\t{artifact.channel}\t"
             f"{artifact.platform.identifier}"
         )
+    click.echo(f"✓ Found {len(artifacts)} downloadable toolchain releases")
     click.echo(
         "You can specify an exact toolchain, such as ise@latest, ise@stable, "
         "gobo@beta, or serpent@0.1.0."
