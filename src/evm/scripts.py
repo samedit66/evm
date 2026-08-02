@@ -21,7 +21,7 @@ from evm.filesystem import atomic_write
 from evm.lockfile import LOCK_NAME, LockFile, load_lock
 from evm.manifest import MANIFEST_NAME, load_manifest
 from evm.model import BuildRequest, Project, Root, Target
-from evm.project import print_toolchain, validate_configuration
+from evm.project.workflow import print_toolchain, validate_configuration
 from evm.toolchains import (
     Toolchain,
     artifact_candidates,

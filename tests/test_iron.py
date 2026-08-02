@@ -7,7 +7,8 @@ import pytest
 from evm.errors import EvmError
 from evm.iron import parse_iron_package, select_iron_project, serialize_iron_package
 from evm.manifest import load_manifest
-from evm.project import create_project
+from evm.project.creation import ProjectCreationRequest, create_project
+from evm.project.templates import LIBRARY_TEMPLATE
 
 
 def test_parse_iron_package_reads_projects_and_metadata(tmp_path: Path) -> None:
@@ -71,7 +72,7 @@ def test_select_iron_project_rejects_path_outside_package(tmp_path: Path) -> Non
 
 
 def test_serialize_iron_package_is_stable(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "example", library=True)
+    project = create_project(ProjectCreationRequest(tmp_path / "example", LIBRARY_TEMPLATE))
     manifest = project.manifest_path
     manifest.write_text(
         manifest.read_text()

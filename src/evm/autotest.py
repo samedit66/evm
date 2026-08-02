@@ -16,7 +16,7 @@ from evm.ecf import parse_ecf
 from evm.errors import EvmError
 from evm.filesystem import atomic_write
 from evm.model import BuildRequest, Project
-from evm.project import prepare_compilation_project, prepare_project
+from evm.project.workflow import prepare_compilation_project, prepare_project
 from evm.toolchains import (
     Toolchain,
     artifact_candidates,

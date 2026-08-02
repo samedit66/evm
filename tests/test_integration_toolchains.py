@@ -9,7 +9,8 @@ import pytest
 from evm.dependencies import install_dependencies, resolve_dependencies
 from evm.manifest import load_manifest
 from evm.model import BuildRequest
-from evm.project import compile_project, create_project
+from evm.project.creation import ProjectCreationRequest, create_project
+from evm.project.workflow import compile_project
 from evm.testing import TestRequest as WorkflowTestRequest
 from evm.testing import test_project as run_project_tests
 
@@ -32,7 +33,7 @@ def test_generated_application_builds_with_real_toolchain(
         pytest.skip(f"{executable} is not installed")
     if adapter == "gobo" and "GOBO" not in os.environ:
         pytest.skip("GOBO is not defined")
-    project = create_project(tmp_path / f"hello_{adapter}")
+    project = create_project(ProjectCreationRequest(tmp_path / f"hello_{adapter}"))
 
     selected = compile_project(
         project,
@@ -62,7 +63,7 @@ def test_real_distribution_library_is_locked_and_materialized(
         pytest.skip(f"{executable} is not installed")
     if adapter == "gobo" and "GOBO" not in os.environ:
         pytest.skip("GOBO is not defined")
-    project = create_project(tmp_path / f"dependency_{adapter}")
+    project = create_project(ProjectCreationRequest(tmp_path / f"dependency_{adapter}"))
     manifest = project.manifest_path
     library_field = f', library = "{library}"' if library else ""
     manifest.write_text(

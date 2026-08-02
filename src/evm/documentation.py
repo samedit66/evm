@@ -10,7 +10,7 @@ from pathlib import Path
 from evm.companion_tools import companion_tool, installed_gobo_tool
 from evm.errors import EvmError
 from evm.model import Project
-from evm.project import prepare_project
+from evm.project.workflow import prepare_project
 from evm.toolchains import Toolchain, select_toolchain, toolchain_environment_values
 
 _BACKENDS = {"gedoc", "eiffelstudio"}

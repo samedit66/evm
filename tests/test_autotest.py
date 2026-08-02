@@ -22,7 +22,8 @@ from evm.autotest import (
 )
 from evm.errors import EvmError
 from evm.model import BuildRequest
-from evm.project import create_project
+from evm.project.creation import ProjectCreationRequest, create_project
+from evm.project.templates import LIBRARY_TEMPLATE
 from evm.toolchains import Toolchain
 from evm.versioning import NumericVersion
 
@@ -93,7 +94,7 @@ def test_generated_runner_registers_each_test() -> None:
 
 
 def test_generated_runner_is_application_for_library_project(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "library", library=True)
+    project = create_project(ProjectCreationRequest(tmp_path / "library", LIBRARY_TEMPLATE))
 
     generated = _generate_runner_project(
         project,
@@ -264,7 +265,7 @@ def test_run_autotest_aggregates_normalized_and_raw_results(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     toolchain = Toolchain(
         "ise",
         tmp_path / "ec",
@@ -318,7 +319,7 @@ def test_run_autotest_aggregates_normalized_and_raw_results(
 
 
 def test_run_autotest_requires_ise(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     toolchain = Toolchain(
         "gobo",
         tmp_path / "gec",

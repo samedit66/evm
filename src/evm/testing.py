@@ -13,7 +13,7 @@ from pathlib import Path
 from evm.autotest import AutoTestDiagnostic, AutoTestRunRequest, run_autotest
 from evm.errors import EvmError
 from evm.model import BuildRequest, Project
-from evm.project import compile_project, effective_sources, prepare_project
+from evm.project.workflow import compile_project, effective_sources, prepare_project
 from evm.toolchains import artifact_candidates, select_toolchain
 
 

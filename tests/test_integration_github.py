@@ -7,7 +7,7 @@ import pytest
 
 from evm.dependencies import install_dependencies, resolve_dependencies
 from evm.manifest import load_manifest
-from evm.project import create_project
+from evm.project.creation import ProjectCreationRequest, create_project
 
 
 @pytest.mark.network
@@ -33,7 +33,7 @@ def test_real_github_eiffel_project_resolves_and_reinstalls_offline(
     url: str,
     ecf: str,
 ) -> None:
-    project = create_project(tmp_path / name)
+    project = create_project(ProjectCreationRequest(tmp_path / name))
     manifest = project.manifest_path
     manifest.write_text(
         manifest.read_text()

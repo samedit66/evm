@@ -7,7 +7,7 @@ import pytest
 
 from evm.dependencies import install_dependencies, resolve_dependencies
 from evm.manifest import load_manifest
-from evm.project import create_project
+from evm.project.creation import ProjectCreationRequest, create_project
 
 
 @pytest.mark.network
@@ -15,7 +15,7 @@ from evm.project import create_project
 def test_real_iron_package_uses_verified_project_local_archives(tmp_path: Path) -> None:
     if shutil.which("iron") is None:
         pytest.skip("iron is not installed")
-    project = create_project(tmp_path / "iron_json")
+    project = create_project(ProjectCreationRequest(tmp_path / "iron_json"))
     manifest = project.manifest_path
     manifest.write_text(manifest.read_text() + '\n[dependencies]\njson = "25.02"\n')
     project = load_manifest(manifest)

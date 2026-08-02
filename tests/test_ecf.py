@@ -18,13 +18,14 @@ from evm.errors import EvmError
 from evm.lockfile import LockedPackage, LockFile, manifest_fingerprint
 from evm.manifest import load_manifest
 from evm.model import Dependency
-from evm.project import create_project, import_ecf
+from evm.project.creation import ProjectCreationRequest, create_project
+from evm.project.workflow import import_ecf
 
 
 def test_semantic_diff_ignores_xml_formatting_and_management_comment(
     tmp_path: Path,
 ) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     document = etree.parse(str(project.ecf_path))
     project.ecf_path.write_bytes(
         etree.tostring(document.getroot(), encoding="UTF-8", xml_declaration=True)
@@ -34,7 +35,7 @@ def test_semantic_diff_ignores_xml_formatting_and_management_comment(
 
 
 def test_explicit_non_scoop_requirement_sets_support_and_use(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     project.manifest_path.write_text(
         project.manifest_path.read_text() + '\n[requires]\nconcurrency = "none"\n'
     )
@@ -119,7 +120,7 @@ def test_prepare_legacy_ecf_uses_available_modern_library_name(
 
 
 def test_ecf_fragment_include_adds_target_constructs(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     config = project.directory / "config"
     config.mkdir()
     (config / "options.xml").write_text(
@@ -139,7 +140,7 @@ def test_ecf_fragment_include_adds_target_constructs(tmp_path: Path) -> None:
 
 
 def test_ecf_fragment_rejects_high_level_conflict(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     config = project.directory / "config"
     config.mkdir()
     (config / "conflict.xml").write_text(
@@ -155,7 +156,7 @@ def test_ecf_fragment_rejects_high_level_conflict(tmp_path: Path) -> None:
 
 
 def test_ecf_fragment_rejects_duplicate_runtime_group_name(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     config = project.directory / "config"
     config.mkdir()
     (config / "duplicate.xml").write_text(
@@ -174,7 +175,7 @@ def test_ecf_fragment_rejects_duplicate_runtime_group_name(tmp_path: Path) -> No
 
 
 def test_ecf_rejects_dependency_name_conflicting_with_cluster(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     dependency = Dependency(name="default_src_0", source="path", path=".")
     project_with_dependency = replace(project, dependencies=(dependency,))
     package = LockedPackage(
@@ -194,7 +195,7 @@ def test_ecf_rejects_dependency_name_conflicting_with_cluster(tmp_path: Path) ->
 
 
 def test_ecf_allows_same_group_names_in_different_targets(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     project.manifest_path.write_text(
         project.manifest_path.read_text()
         + '\n[targets.alternate]\nroot = "APPLICATION.make"\nsources = ["src"]\n'
@@ -209,7 +210,7 @@ def test_ecf_allows_same_group_names_in_different_targets(tmp_path: Path) -> Non
 
 
 def test_autotest_target_includes_ise_testing_library(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     project.manifest_path.write_text(
         project.manifest_path.read_text()
         + '\n[targets.test]\nroot = "APPLICATION.make"\nsources = ["tests"]\n'

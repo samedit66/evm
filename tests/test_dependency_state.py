@@ -10,14 +10,15 @@ from evm.dependencies import clean_unused, dependency_library_locations, depende
 from evm.errors import EvmError
 from evm.lockfile import LockedPackage, LockFile, manifest_fingerprint
 from evm.model import Dependency
-from evm.project import create_project
+from evm.project.creation import ProjectCreationRequest, create_project
+from evm.project.templates import LIBRARY_TEMPLATE
 from evm.toolchains import Detection
 from evm.versioning import NumericVersion
 
 
 def test_dependency_library_locations_filter_and_normalize_paths(tmp_path: Path) -> None:
-    shared = create_project(tmp_path / "shared", library=True)
-    project = create_project(tmp_path / "app")
+    shared = create_project(ProjectCreationRequest(tmp_path / "shared", LIBRARY_TEMPLATE))
+    project = create_project(ProjectCreationRequest(tmp_path / "app"))
     path_package = LockedPackage(
         name="shared",
         version="1",
@@ -47,7 +48,7 @@ def test_dependency_library_locations_filter_and_normalize_paths(tmp_path: Path)
 
 
 def test_dependency_tree_renders_sources_missing_nodes_and_cycles(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "app")
+    project = create_project(ProjectCreationRequest(tmp_path / "app"))
     project = replace(
         project,
         dependencies=(
@@ -86,7 +87,7 @@ def test_dependency_tree_renders_sources_missing_nodes_and_cycles(tmp_path: Path
 
 
 def test_dependency_tree_focus_explains_all_paths(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "app")
+    project = create_project(ProjectCreationRequest(tmp_path / "app"))
     project = replace(
         project,
         dependencies=(
@@ -113,7 +114,7 @@ def test_dependency_tree_focus_explains_all_paths(tmp_path: Path) -> None:
 
 
 def test_clean_unused_handles_absent_state_and_removes_archive_files(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "app")
+    project = create_project(ProjectCreationRequest(tmp_path / "app"))
     package = LockedPackage(
         name="json",
         version="1",
@@ -143,7 +144,7 @@ def test_distribution_resolution_and_materialization(
     time = library_root / "time"
     time.mkdir(parents=True)
     (time / "time.ecf").write_text("<system/>")
-    project = create_project(tmp_path / "app")
+    project = create_project(ProjectCreationRequest(tmp_path / "app"))
     dependency = Dependency(name="time_lib", source="ise", library="time")
     project = replace(project, dependencies=(dependency,))
     detection = Detection(tmp_path / "ec", NumericVersion.parse("25.2.0"), None)
@@ -164,7 +165,7 @@ def test_distribution_resolution_reports_detection_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    project = create_project(tmp_path / "app")
+    project = create_project(ProjectCreationRequest(tmp_path / "app"))
     dependency = Dependency(name="time", source="ise")
     project = replace(project, dependencies=(dependency,))
     detection = Detection(None, None, "not installed")

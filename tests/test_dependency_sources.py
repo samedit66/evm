@@ -15,7 +15,7 @@ import evm.dependencies as dependencies
 from evm.errors import EvmError
 from evm.lockfile import LockedPackage, LockFile, manifest_fingerprint
 from evm.model import Dependency
-from evm.project import create_project
+from evm.project.creation import ProjectCreationRequest, create_project
 
 
 def test_iron_metadata_is_normalized_to_archive_identity() -> None:
@@ -54,7 +54,7 @@ def test_online_iron_resolution_downloads_and_locks_verified_archive(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    project = create_project(tmp_path / "app")
+    project = create_project(ProjectCreationRequest(tmp_path / "app"))
     archive = _write_archive(tmp_path / "json.tar.bz2", {"json.ecf": b"<system/>"})
     checksum = f"sha256:{dependencies._file_sha256(archive)}"
     monkeypatch.setattr(dependencies.shutil, "which", lambda _: "/usr/bin/iron")
@@ -83,7 +83,7 @@ def test_online_iron_resolution_rejects_version_mismatch(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    project = create_project(tmp_path / "app")
+    project = create_project(ProjectCreationRequest(tmp_path / "app"))
     monkeypatch.setattr(dependencies.shutil, "which", lambda _: "/usr/bin/iron")
     monkeypatch.setattr(
         dependencies.subprocess,
@@ -105,7 +105,7 @@ def test_iron_resolution_reports_missing_client_and_metadata_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    project = create_project(tmp_path / "app")
+    project = create_project(ProjectCreationRequest(tmp_path / "app"))
     dependency = Dependency(name="json", source="iron")
     parsed = replace(project, dependencies=(dependency,))
     monkeypatch.setattr(dependencies.shutil, "which", lambda _: None)
@@ -127,7 +127,7 @@ def test_offline_iron_resolution_uses_previous_archive(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    project = create_project(tmp_path / "app")
+    project = create_project(ProjectCreationRequest(tmp_path / "app"))
     archive = _write_archive(tmp_path / "json.tar.bz2", {"json.ecf": b"<system/>"})
     digest = dependencies._file_sha256(archive)
     cached = project.state_directory / "sources" / "archives" / f"{digest}.tar.bz2"
@@ -157,7 +157,7 @@ def test_offline_iron_resolution_requires_previous_package(
     monkeypatch: pytest.MonkeyPatch,
     previous: LockFile | None,
 ) -> None:
-    project = create_project(tmp_path / "app")
+    project = create_project(ProjectCreationRequest(tmp_path / "app"))
     dependency = Dependency(name="json", source="iron")
     monkeypatch.setattr(dependencies.shutil, "which", lambda _: "/usr/bin/iron")
 
@@ -173,7 +173,7 @@ def test_ensure_iron_archive_downloads_missing_cache_and_checks_checksum(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    project = create_project(tmp_path / "app")
+    project = create_project(ProjectCreationRequest(tmp_path / "app"))
     archive = tmp_path / "archive.tar.bz2"
     archive.write_bytes(b"archive")
     package = LockedPackage(
@@ -203,7 +203,7 @@ def test_ensure_iron_archive_downloads_missing_cache_and_checks_checksum(
 
 
 def test_ensure_iron_archive_requires_locked_archive_identity(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "app")
+    project = create_project(ProjectCreationRequest(tmp_path / "app"))
     package = LockedPackage(name="json", version="1.0.0", source="iron+repo")
 
     with pytest.raises(EvmError, match="no locked archive identity"):
@@ -214,7 +214,7 @@ def test_ensure_iron_archive_requires_locked_archive_identity(tmp_path: Path) ->
 
 
 def test_extract_archive_reports_corruption_and_cleans_directory(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "app")
+    project = create_project(ProjectCreationRequest(tmp_path / "app"))
     archive = tmp_path / "broken.tar.bz2"
     archive.write_bytes(b"broken")
 
@@ -280,7 +280,7 @@ def test_ecf_iron_dependency_reports_invalid_xml(tmp_path: Path) -> None:
 
 
 def test_materialization_rewrites_known_iron_locations(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "app")
+    project = create_project(ProjectCreationRequest(tmp_path / "app"))
     root = tmp_path / "content"
     root.mkdir()
     ecf = root / "json.ecf"
@@ -301,7 +301,7 @@ def test_materialization_rewrites_known_iron_locations(tmp_path: Path) -> None:
 
 
 def test_materialization_reports_invalid_ecf_during_rewrite(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "app")
+    project = create_project(ProjectCreationRequest(tmp_path / "app"))
     root = tmp_path / "content"
     root.mkdir()
     (root / "broken.ecf").write_text("<broken>")
@@ -395,7 +395,7 @@ def test_download_archive_streams_content_and_reuses_existing_file(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    project = create_project(tmp_path / "app")
+    project = create_project(ProjectCreationRequest(tmp_path / "app"))
     response = _StreamResponse([b"one", b"two"])
     monkeypatch.setattr(dependencies.httpx, "stream", lambda *args, **kwargs: response)
 
@@ -414,7 +414,7 @@ def test_download_archive_removes_partial_file_on_http_error(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    project = create_project(tmp_path / "app")
+    project = create_project(ProjectCreationRequest(tmp_path / "app"))
     error = httpx.HTTPError("network failed")
     monkeypatch.setattr(
         dependencies.httpx,

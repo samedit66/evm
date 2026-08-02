@@ -8,9 +8,10 @@ import pytest
 
 from evm.errors import EvmError
 from evm.model import BuildRequest
-from evm.project import (
+from evm.project.creation import ProjectCreationRequest, create_project
+from evm.project.templates import LIBRARY_TEMPLATE
+from evm.project.workflow import (
     compile_project,
-    create_project,
     prepare_compilation_project,
     run_project,
 )
@@ -27,25 +28,25 @@ def test_compile_project_orchestrates_preparation_and_compiler(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     selected = _toolchain()
     build_directory = tmp_path / "build"
     calls: list[object] = []
     monkeypatch.setattr(
-        "evm.project.prepare_project",
+        "evm.project.workflow.prepare_project",
         lambda *args, **kwargs: calls.append(("prepare", kwargs)),
     )
-    monkeypatch.setattr("evm.project.select_toolchain", lambda value, compiler: selected)
+    monkeypatch.setattr("evm.project.workflow.select_toolchain", lambda value, compiler: selected)
     monkeypatch.setattr(
-        "evm.project.prepare_build_directory",
+        "evm.project.workflow.prepare_build_directory",
         lambda *args, **kwargs: build_directory,
     )
     monkeypatch.setattr(
-        "evm.project.compiler_command",
+        "evm.project.workflow.compiler_command",
         lambda *args, **kwargs: ["/tools/gec", "hello.ecf"],
     )
     monkeypatch.setattr(
-        "evm.project.run_compiler",
+        "evm.project.workflow.run_compiler",
         lambda command, directory, capture_output: calls.append(
             ("run", command, directory, capture_output)
         ),
@@ -64,7 +65,7 @@ def test_compile_project_orchestrates_preparation_and_compiler(
 
 
 def test_compile_project_rejects_unknown_target(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
 
     with pytest.raises(EvmError, match="unknown target"):
         compile_project(project, BuildRequest(target="missing"))
@@ -74,19 +75,19 @@ def test_run_project_executes_first_existing_artifact(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     selected = _toolchain()
     missing = tmp_path / "missing"
     executable = tmp_path / "hello-executable"
     executable.write_text("binary")
     observed: list[object] = []
-    monkeypatch.setattr("evm.project.compile_project", lambda *args, **kwargs: selected)
+    monkeypatch.setattr("evm.project.workflow.compile_project", lambda *args, **kwargs: selected)
     monkeypatch.setattr(
-        "evm.project.artifact_candidates",
+        "evm.project.workflow.artifact_candidates",
         lambda *args: (missing, executable),
     )
     monkeypatch.setattr(
-        "evm.project.subprocess.run",
+        "evm.project.workflow.subprocess.run",
         lambda command, cwd: observed.append((command, cwd)) or SimpleNamespace(returncode=7),
     )
 
@@ -100,14 +101,16 @@ def test_run_project_rejects_libraries_and_missing_artifacts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    library = create_project(tmp_path / "library", library=True)
+    library = create_project(ProjectCreationRequest(tmp_path / "library", LIBRARY_TEMPLATE))
     with pytest.raises(EvmError, match="type 'application'"):
         run_project(library, BuildRequest(), ())
 
-    project = create_project(tmp_path / "hello")
-    monkeypatch.setattr("evm.project.compile_project", lambda *args, **kwargs: _toolchain())
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     monkeypatch.setattr(
-        "evm.project.artifact_candidates",
+        "evm.project.workflow.compile_project", lambda *args, **kwargs: _toolchain()
+    )
+    monkeypatch.setattr(
+        "evm.project.workflow.artifact_candidates",
         lambda *args: (tmp_path / "first", tmp_path / "second"),
     )
     with pytest.raises(EvmError, match="executable was not found"):
@@ -118,9 +121,11 @@ def test_legacy_compilation_project_uses_prepared_ecf(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    project = replace(create_project(tmp_path / "hello"), ecf_managed=False)
+    project = replace(create_project(ProjectCreationRequest(tmp_path / "hello")), ecf_managed=False)
     prepared = tmp_path / "prepared.ecf"
-    monkeypatch.setattr("evm.project.prepare_legacy_ecf", lambda value, variables: prepared)
+    monkeypatch.setattr(
+        "evm.project.workflow.prepare_legacy_ecf", lambda value, variables: prepared
+    )
     monkeypatch.setenv("ISE_LIBRARY", str(tmp_path / "ise-library"))
 
     result = prepare_compilation_project(project, _toolchain("ise"))

@@ -13,7 +13,8 @@ from evm.ecf import generate_ecf
 from evm.errors import EvmError
 from evm.manifest import load_manifest
 from evm.model import BuildRequest, Project
-from evm.project import create_project
+from evm.project.creation import ProjectCreationRequest, create_project
+from evm.project.templates import LIBRARY_TEMPLATE
 from evm.scripts import (
     ScriptRunRequest,
     _compile_script,
@@ -107,7 +108,7 @@ def test_script_inherits_nearest_project_without_changing_ecf(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    project = create_project(tmp_path / "project")
+    project = create_project(ProjectCreationRequest(tmp_path / "project"))
     project.manifest_path.write_text(
         project.manifest_path.read_text()
         + '\n[toolchain]\ndefault = "gobo@26.06"\nmatrix = ["gobo@26.06"]\n'
@@ -131,8 +132,8 @@ def test_script_inherits_nearest_project_without_changing_ecf(
 
 
 def test_script_rejects_sources_from_different_project_contexts(tmp_path: Path) -> None:
-    first_project = create_project(tmp_path / "first")
-    second_project = create_project(tmp_path / "second")
+    first_project = create_project(ProjectCreationRequest(tmp_path / "first"))
+    second_project = create_project(ProjectCreationRequest(tmp_path / "second"))
     first = first_project.directory / "src" / "application.e"
     second = second_project.directory / "src" / "application.e"
 
@@ -141,8 +142,8 @@ def test_script_rejects_sources_from_different_project_contexts(tmp_path: Path) 
 
 
 def test_script_ecf_keeps_path_dependencies_relative_to_cached_ecf(tmp_path: Path) -> None:
-    dependency = create_project(tmp_path / "shared", library=True)
-    project = create_project(tmp_path / "application")
+    dependency = create_project(ProjectCreationRequest(tmp_path / "shared", LIBRARY_TEMPLATE))
+    project = create_project(ProjectCreationRequest(tmp_path / "application"))
     manifest = project.manifest_path
     manifest.write_text(
         manifest.read_text()
@@ -216,7 +217,7 @@ def test_script_validates_source_boundaries(
 
 
 def test_script_rejects_standalone_with_manifest(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     source = project.directory / "src" / "application.e"
 
     with pytest.raises(EvmError, match="cannot be used together"):

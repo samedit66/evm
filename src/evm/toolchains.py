@@ -10,6 +10,11 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from evm.compiler_adapters import (
+    build_directory,
+    compiler_adapter,
+    compiler_adapter_names,
+)
 from evm.errors import EvmError
 from evm.model import BuildRequest, CompilerRequirement, Project
 from evm.toolchain_store import list_installations, toolchain_environment
@@ -20,7 +25,7 @@ from evm.toolchain_types import (
 )
 from evm.versioning import NumericVersion, satisfies
 
-KNOWN_ADAPTERS = ("ise", "gobo")
+KNOWN_ADAPTERS = compiler_adapter_names()
 _ADAPTER_EXECUTABLES = {"ise": "ec", "gobo": "gec"}
 _VERSION_TIMEOUT_SECONDS = 15
 _NUMERIC_VERSION_RE = re.compile(r"\d+(?:\.\d+)+")
@@ -28,6 +33,12 @@ _NUMERIC_VERSION_RE = re.compile(r"\d+(?:\.\d+)+")
 
 @dataclass(frozen=True)
 class Toolchain:
+    """A compiler selected for one project operation.
+
+    This value represents a usable compiler executable, not a release catalog
+    or the lifecycle of an installed distribution.
+    """
+
     adapter: str
     executable: Path
     version: NumericVersion
@@ -42,6 +53,8 @@ class Toolchain:
 
 @dataclass(frozen=True)
 class Detection:
+    """Result of probing a compiler executable without selecting it."""
+
     executable: Path | None
     version: NumericVersion | None
     error: str | None
@@ -49,6 +62,8 @@ class Detection:
 
 @dataclass(frozen=True)
 class _SelectionPolicy:
+    """Ordered compiler requirements and the reason for their priority."""
+
     candidates: tuple[CompilerRequirement, ...]
     mode: str
     reason: str
@@ -179,7 +194,7 @@ def prepare_build_directory(
     *,
     clean: bool = False,
 ) -> Path:
-    directory = _build_directory(toolchain, project, request)
+    directory = build_directory(toolchain, project, request)
     if (
         clean or (toolchain.adapter == "ise" and project.kind == "library" and not check_only)
     ) and directory.exists():
@@ -194,48 +209,12 @@ def compiler_command(
     request: BuildRequest,
     check_only: bool = False,
 ) -> list[str]:
-    ecf = str(project.ecf_path)
-    if toolchain.adapter == "ise":
-        command = [
-            str(toolchain.executable),
-            "-batch",
-            "-config",
-            ecf,
-            "-target",
-            request.target,
-            "-project_path",
-            str(_build_directory(toolchain, project, request)),
-        ]
-        if check_only:
-            command.append("-finalize" if request.release else "-melt")
-        elif project.kind == "library":
-            command.append("-precompile")
-            if request.release:
-                command.append("-finalize")
-            command.append("-c_compile")
-        elif request.release:
-            command.extend(("-finalize", "-c_compile"))
-        else:
-            command.extend(("-freeze", "-c_compile"))
-    else:
-        command = [
-            str(toolchain.executable),
-            ecf,
-            f"--target={request.target}",
-            "--variable=evm_compiler=gobo",
-            f"--variable=evm_architecture={platform.machine().lower()}",
-        ]
-        if request.release:
-            command.append("--finalize")
-        for key, value in project.requires:
-            if key == "ise-semantics":
-                command.append(f"--ise={value}")
-            elif key in {"concurrency", "void-safety"}:
-                command.append(f"--capability={key.replace('-', '_')}={value}")
-        command.extend(project.compiler_arguments.get("gobo", ()))
-    if toolchain.adapter == "ise":
-        command.extend(project.compiler_arguments.get("ise", ()))
-    return command
+    return compiler_adapter(toolchain.adapter).compiler_command(
+        toolchain,
+        project,
+        request,
+        check_only,
+    )
 
 
 def run_compiler(
@@ -290,14 +269,7 @@ def artifact_candidates(
     project: Project,
     request: BuildRequest,
 ) -> tuple[Path, ...]:
-    base = _build_directory(toolchain, project, request)
-    executable = project.name + (".exe" if os.name == "nt" else "")
-    if toolchain.adapter == "ise":
-        code = "F_code" if request.release else "W_code"
-        output = base / "EIFGENs" / request.target / code
-        driver = "driver" + (".exe" if os.name == "nt" else "")
-        return (output / executable, output / driver)
-    return (base / executable, base / request.target, base / f"{request.target}.exe")
+    return compiler_adapter(toolchain.adapter).artifact_candidates(toolchain, project, request)
 
 
 def _validate_adapter(adapter: str) -> None:
@@ -385,17 +357,4 @@ def _constraint_for(project: Project, adapter: str) -> str | None:
 
 
 def _capability_error(project: Project, adapter: str) -> str | None:
-    requirements = dict(project.requires)
-    if adapter == "gobo" and requirements.get("concurrency") == "scoop":
-        return "required capability concurrency=scoop is unsupported"
-    return None
-
-
-def _build_directory(
-    toolchain: Toolchain,
-    project: Project,
-    request: BuildRequest,
-) -> Path:
-    mode = "release" if request.release else "dev"
-    root = project.build_root or project.directory / "build"
-    return root / toolchain.adapter / str(toolchain.version) / request.target / mode
+    return compiler_adapter(adapter).compatibility_error(project)

@@ -8,7 +8,8 @@ import pytest
 
 from evm.errors import EvmError
 from evm.model import BuildRequest, CompilerRequirement
-from evm.project import create_project
+from evm.project.creation import ProjectCreationRequest, create_project
+from evm.project.templates import LIBRARY_TEMPLATE
 from evm.toolchains import (
     Detection,
     Toolchain,
@@ -33,7 +34,7 @@ def test_numeric_version_constraints() -> None:
 def test_explicit_compiler_wins_over_environment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     detections = {
         "ise": Detection(Path("/bin/ec"), NumericVersion.parse("25.12"), None),
         "gobo": Detection(
@@ -54,7 +55,7 @@ def test_explicit_compiler_wins_over_environment(
 def test_compatibility_order_controls_automatic_selection(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     project = replace(
         project,
         compilers=(
@@ -81,7 +82,7 @@ def test_automatic_selection_skips_incompatible_preferred_compiler(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     project = replace(
-        create_project(tmp_path / "hello"),
+        create_project(ProjectCreationRequest(tmp_path / "hello")),
         compilers=(
             CompilerRequirement("gobo", ">=99"),
             CompilerRequirement("ise", ">=25"),
@@ -103,7 +104,7 @@ def test_deprecated_compiler_environment_variable_is_ignored(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     detections = {
         "ise": Detection(Path("/bin/ec"), NumericVersion.parse("25.12"), None),
         "gobo": Detection(Path("/bin/gec"), NumericVersion.parse("26.06"), None),
@@ -119,14 +120,14 @@ def test_deprecated_compiler_environment_variable_is_ignored(
 
 
 def test_unknown_compiler_id_is_rejected(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
 
     with pytest.raises(EvmError, match="known adapters: ise, gobo"):
         select_toolchain(project, "gec")
 
 
 def test_release_mode_maps_to_each_compiler(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     ise = Toolchain(
         "ise",
         Path("/bin/ec"),
@@ -153,7 +154,7 @@ def test_release_mode_maps_to_each_compiler(tmp_path: Path) -> None:
 
 
 def test_compiler_command_has_no_filesystem_side_effects(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     toolchain = Toolchain(
         "gobo",
         Path("/bin/gec"),
@@ -169,7 +170,7 @@ def test_compiler_command_has_no_filesystem_side_effects(tmp_path: Path) -> None
 
 
 def test_ise_workbench_artifacts_include_driver(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     toolchain = Toolchain(
         "ise",
         Path("/bin/ec"),
@@ -184,7 +185,7 @@ def test_ise_workbench_artifacts_include_driver(tmp_path: Path) -> None:
 
 
 def test_ise_library_preparation_removes_stale_precompile(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "library", library=True)
+    project = create_project(ProjectCreationRequest(tmp_path / "library", LIBRARY_TEMPLATE))
     toolchain = Toolchain(
         "ise",
         Path("/bin/ec"),
@@ -245,7 +246,7 @@ def test_selection_reports_all_rejection_reasons(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     project = replace(
-        create_project(tmp_path / "hello"),
+        create_project(ProjectCreationRequest(tmp_path / "hello")),
         compilers=(CompilerRequirement("gobo", ">=99"),),
     )
     monkeypatch.setattr(
@@ -264,7 +265,7 @@ def test_selection_enforces_capabilities_and_compatibility(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    base = create_project(tmp_path / "hello")
+    base = create_project(ProjectCreationRequest(tmp_path / "hello"))
     detections = {
         "ise": Detection(Path("/tools/ec"), NumericVersion.parse("25.12"), None),
         "gobo": Detection(Path("/tools/gec"), NumericVersion.parse("26.06"), None),
@@ -307,11 +308,11 @@ def test_run_compiler_sets_runtime_environment_and_reports_output(
 
 def test_compiler_commands_cover_check_library_and_capability_modes(tmp_path: Path) -> None:
     application = replace(
-        create_project(tmp_path / "app"),
+        create_project(ProjectCreationRequest(tmp_path / "app")),
         requires=(("ise-semantics", "25.12"), ("void-safety", "all")),
         compiler_arguments={"gobo": ("--cc=zig",), "ise": ("-keep",)},
     )
-    library = create_project(tmp_path / "library", library=True)
+    library = create_project(ProjectCreationRequest(tmp_path / "library", LIBRARY_TEMPLATE))
     ise = Toolchain("ise", Path("/tools/ec"), NumericVersion.parse("25.12"), "explicit", "x")
     gobo = Toolchain("gobo", Path("/tools/gec"), NumericVersion.parse("26.06"), "explicit", "x")
 

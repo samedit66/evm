@@ -14,7 +14,7 @@ from evm.lockfile import (
     serialize_lock,
 )
 from evm.model import ToolchainConfiguration
-from evm.project import create_project
+from evm.project.creation import ProjectCreationRequest, create_project
 
 _LEGACY_EMPTY_FINGERPRINT = "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
 
@@ -156,7 +156,7 @@ def test_load_lock_rejects_duplicate_package_names(tmp_path: Path) -> None:
 
 
 def test_format_one_lock_uses_legacy_manifest_fingerprint(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     path = project.directory / "Eiffel.lock"
     path.write_text(f'format-version = 1\nmanifest-fingerprint = "{_LEGACY_EMPTY_FINGERPRINT}"\n')
 
@@ -167,7 +167,7 @@ def test_format_one_lock_uses_legacy_manifest_fingerprint(tmp_path: Path) -> Non
 
 
 def test_format_one_lock_cannot_validate_new_toolchain_policy(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     project = replace(
         project,
         toolchain=ToolchainConfiguration("gobo@26.06", ("gobo@26.06",)),

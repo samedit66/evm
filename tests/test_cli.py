@@ -152,7 +152,7 @@ def test_explain_json_includes_conditions(tmp_path: Path, monkeypatch) -> None:
         + 'when = { os = "macos", mode = "dev" }\n'
         + 'sources = ["src"]\n'
     )
-    monkeypatch.setattr("evm.project.platform.system", lambda: "Darwin")
+    monkeypatch.setattr("evm.project.workflow.platform.system", lambda: "Darwin")
     monkeypatch.chdir(project)
 
     result = runner.invoke(main, ["explain", "--json"])
@@ -175,7 +175,7 @@ def test_explain_supports_target_tables_text_and_ecf_diff(
     def unavailable_toolchain(*args: object, **kwargs: object) -> None:
         raise EvmError("not installed")
 
-    monkeypatch.setattr("evm.project.select_toolchain", unavailable_toolchain)
+    monkeypatch.setattr("evm.project.workflow.select_toolchain", unavailable_toolchain)
 
     targets = runner.invoke(main, ["explain", "--targets"])
     targets_json = runner.invoke(main, ["explain", "--targets", "--json"])

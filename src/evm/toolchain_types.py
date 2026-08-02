@@ -16,12 +16,16 @@ _SELECTOR_RE = re.compile(r"^(ise|gobo)(?:@([A-Za-z0-9][A-Za-z0-9._-]*))?$")
 
 
 class InstallationKind(StrEnum):
+    """Ownership policy for a toolchain known to EVM."""
+
     MANAGED = "managed"
     LINKED = "linked"
 
 
 @dataclass(frozen=True)
 class ToolchainSelector:
+    """A provider name with an optional release, revision, or channel."""
+
     provider: str
     version: str | None = None
 
@@ -46,6 +50,8 @@ class ToolchainSelector:
 
 @dataclass(frozen=True)
 class ToolchainPlatform:
+    """Normalized host identifiers used by catalogs and native tools."""
+
     operating_system: str
     architecture: str
     archive_platform: str
@@ -58,6 +64,8 @@ class ToolchainPlatform:
 
 @dataclass(frozen=True)
 class ToolchainArtifact:
+    """A downloadable toolchain distribution resolved for one platform."""
+
     provider: str
     version: str
     revision: str
@@ -74,6 +82,8 @@ class ToolchainArtifact:
 
 @dataclass(frozen=True)
 class ToolchainInstallation:
+    """A managed or linked compiler distribution available on this machine."""
+
     provider: str
     version: str
     revision: str

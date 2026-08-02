@@ -17,11 +17,12 @@ from evm.errors import EvmError
 from evm.lockfile import LockedPackage, LockFile, load_lock
 from evm.manifest import load_manifest
 from evm.model import Dependency, Project
-from evm.project import create_project
+from evm.project.creation import ProjectCreationRequest, create_project
+from evm.project.templates import LIBRARY_TEMPLATE
 
 
 def test_resolver_rejects_programmatic_implicit_runtime_dependency(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     dependency = Dependency(name="eiffel_base", source="ise", library="base")
     project_with_runtime_dependency = replace(project, dependencies=(dependency,))
 
@@ -35,7 +36,7 @@ def test_resolver_accepts_implicit_runtime_discovered_from_iron(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     json_dependency = Dependency(name="json", source="iron", version="25.02")
     project = replace(project, dependencies=(json_dependency,))
     base_dependency = Dependency(
@@ -80,7 +81,7 @@ def test_add_runtime_dependency_preserves_project_files(
     monkeypatch: pytest.MonkeyPatch,
     arguments: list[str],
 ) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     monkeypatch.chdir(project.directory)
     files = (project.manifest_path, project.directory / "Eiffel.lock", project.ecf_path)
     original_contents = {path: path.read_bytes() for path in files}
@@ -97,8 +98,8 @@ def test_path_dependency_is_live_and_rendered_as_relative_ecf(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    dependency = create_project(tmp_path / "shared", library=True)
-    project = create_project(tmp_path / "hello")
+    dependency = create_project(ProjectCreationRequest(tmp_path / "shared", LIBRARY_TEMPLATE))
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     monkeypatch.chdir(project.directory)
     runner = CliRunner()
 
@@ -131,7 +132,7 @@ def test_git_tag_is_locked_materialized_and_reinstalled_offline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository = _git_library(tmp_path / "tagged", version="1.2.3", tag="v1.2.3")
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     monkeypatch.chdir(project.directory)
     runner = CliRunner()
 
@@ -161,7 +162,7 @@ def test_git_branch_changes_only_after_update(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository = _git_library(tmp_path / "moving", version="1.0.0")
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     monkeypatch.chdir(project.directory)
     runner = CliRunner()
     added = runner.invoke(
@@ -191,7 +192,7 @@ def test_git_monorepository_subdir_and_legacy_ecf_are_supported(
 ) -> None:
     repository = tmp_path / "mono"
     package = repository / "packages" / "parser"
-    create_project(package, library=True)
+    create_project(ProjectCreationRequest(package, LIBRARY_TEMPLATE))
     _initialize_repository(repository)
     legacy = tmp_path / "legacy"
     legacy.mkdir()
@@ -201,7 +202,7 @@ def test_git_monorepository_subdir_and_legacy_ecf_are_supported(
         '<target name="default"><root all_classes="true"/></target></system>'
     )
     _initialize_repository(legacy)
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     monkeypatch.chdir(project.directory)
     runner = CliRunner()
 
@@ -244,8 +245,8 @@ def test_remove_preserves_manifest_lock_and_ecf_consistency(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    create_project(tmp_path / "shared", library=True)
-    project = create_project(tmp_path / "hello")
+    create_project(ProjectCreationRequest(tmp_path / "shared", LIBRARY_TEMPLATE))
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     monkeypatch.chdir(project.directory)
     runner = CliRunner()
     assert runner.invoke(main, ["add", "shared", "--path", "../shared"]).exit_code == 0
@@ -265,7 +266,7 @@ def test_clean_unused_removes_unreachable_git_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository = _git_library(tmp_path / "unused", version="1.0.0")
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     monkeypatch.chdir(project.directory)
     runner = CliRunner()
     added = runner.invoke(
@@ -286,8 +287,8 @@ def test_clean_unused_removes_unreachable_git_state(
 
 
 def test_manifest_lock_mismatch_is_rejected_before_install(tmp_path: Path) -> None:
-    create_project(tmp_path / "shared", library=True)
-    project = create_project(tmp_path / "hello")
+    create_project(ProjectCreationRequest(tmp_path / "shared", LIBRARY_TEMPLATE))
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     manifest = project.manifest_path
     manifest.write_text(
         manifest.read_text() + '\n[dependencies]\nshared = { path = "../shared" }\n'
@@ -298,8 +299,8 @@ def test_manifest_lock_mismatch_is_rejected_before_install(tmp_path: Path) -> No
 
 
 def test_local_patch_replaces_git_content_without_network(tmp_path: Path) -> None:
-    create_project(tmp_path / "shared", library=True)
-    project = create_project(tmp_path / "hello")
+    create_project(ProjectCreationRequest(tmp_path / "shared", LIBRARY_TEMPLATE))
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     manifest = project.manifest_path
     manifest.write_text(
         manifest.read_text()
@@ -319,8 +320,8 @@ def test_local_patch_replaces_git_content_without_network(tmp_path: Path) -> Non
 def test_development_dependency_is_only_added_to_development_target(
     tmp_path: Path,
 ) -> None:
-    create_project(tmp_path / "testing", library=True)
-    project = create_project(tmp_path / "hello")
+    create_project(ProjectCreationRequest(tmp_path / "testing", LIBRARY_TEMPLATE))
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     manifest = project.manifest_path
     manifest.write_text(
         manifest.read_text()
@@ -343,7 +344,7 @@ def test_development_dependency_is_only_added_to_development_target(
 
 
 def _git_library(path: Path, *, version: str, tag: str | None = None) -> Path:
-    create_project(path, library=True)
+    create_project(ProjectCreationRequest(path, LIBRARY_TEMPLATE))
     manifest = path / "Eiffel.toml"
     manifest.write_text(manifest.read_text().replace('version = "0.1.0"', f'version = "{version}"'))
     _initialize_repository(path)

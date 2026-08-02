@@ -14,11 +14,12 @@ from evm.errors import EvmError
 from evm.lockfile import LockedPackage, LockFile, manifest_fingerprint
 from evm.manifest import load_manifest
 from evm.model import Dependency, Project
-from evm.project import create_project
+from evm.project.creation import ProjectCreationRequest, create_project
+from evm.project.templates import LIBRARY_TEMPLATE
 
 
 def test_resolver_rejects_unknown_selected_dependency(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "app")
+    project = create_project(ProjectCreationRequest(tmp_path / "app"))
 
     with pytest.raises(EvmError, match="unknown dependency: missing"):
         resolve_dependencies(project, names={"missing"})
@@ -42,11 +43,11 @@ def test_resolver_rejects_conflicting_transitive_versions(tmp_path: Path) -> Non
 
 
 def test_resolver_reports_dependency_cycle(tmp_path: Path) -> None:
-    first = create_project(tmp_path / "first", library=True)
-    second = create_project(tmp_path / "second", library=True)
+    first = create_project(ProjectCreationRequest(tmp_path / "first", LIBRARY_TEMPLATE))
+    second = create_project(ProjectCreationRequest(tmp_path / "second", LIBRARY_TEMPLATE))
     _append_dependency(first, 'second = { path = "../second" }')
     _append_dependency(second, 'first = { path = "../first" }')
-    project = create_project(tmp_path / "app")
+    project = create_project(ProjectCreationRequest(tmp_path / "app"))
     _append_dependency(project, 'first = { path = "../first" }')
 
     with pytest.raises(EvmError, match="dependency cycle detected: first -> second -> first"):
@@ -54,9 +55,9 @@ def test_resolver_reports_dependency_cycle(tmp_path: Path) -> None:
 
 
 def test_selective_update_preserves_unselected_locked_closure(tmp_path: Path) -> None:
-    create_project(tmp_path / "first", library=True)
-    second = create_project(tmp_path / "second", library=True)
-    project = create_project(tmp_path / "app")
+    create_project(ProjectCreationRequest(tmp_path / "first", LIBRARY_TEMPLATE))
+    second = create_project(ProjectCreationRequest(tmp_path / "second", LIBRARY_TEMPLATE))
+    project = create_project(ProjectCreationRequest(tmp_path / "app"))
     _append_dependencies(
         project,
         ['first = { path = "../first" }', 'second = { path = "../second" }'],
@@ -71,10 +72,10 @@ def test_selective_update_preserves_unselected_locked_closure(tmp_path: Path) ->
 
 
 def test_selective_update_rejects_incomplete_locked_closure(tmp_path: Path) -> None:
-    create_project(tmp_path / "first", library=True)
-    second = create_project(tmp_path / "second", library=True)
+    create_project(ProjectCreationRequest(tmp_path / "first", LIBRARY_TEMPLATE))
+    second = create_project(ProjectCreationRequest(tmp_path / "second", LIBRARY_TEMPLATE))
     _append_dependency(second, 'missing = { path = "../missing" }')
-    project = create_project(tmp_path / "app")
+    project = create_project(ProjectCreationRequest(tmp_path / "app"))
     _append_dependencies(
         project,
         ['first = { path = "../first" }', 'second = { path = "../second" }'],
@@ -97,7 +98,7 @@ def test_selective_update_rejects_incomplete_locked_closure(tmp_path: Path) -> N
 
 
 def test_path_dependency_must_exist(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "app")
+    project = create_project(ProjectCreationRequest(tmp_path / "app"))
     dependency = Dependency(name="missing", source="path", path="../missing")
 
     with pytest.raises(EvmError, match="path dependency missing does not exist"):
@@ -109,7 +110,7 @@ def test_path_dependency_rejects_ambiguous_legacy_ecf(tmp_path: Path) -> None:
     legacy.mkdir()
     (legacy / "one.ecf").touch()
     (legacy / "two.ecf").touch()
-    project = create_project(tmp_path / "app")
+    project = create_project(ProjectCreationRequest(tmp_path / "app"))
     dependency = Dependency(name="legacy", source="path", path="../legacy")
 
     with pytest.raises(EvmError, match="legacy dependency must specify ecf"):
@@ -121,7 +122,7 @@ def test_dependency_ecf_cannot_escape_package_root(tmp_path: Path) -> None:
     legacy.mkdir()
     outside = tmp_path / "outside.ecf"
     outside.touch()
-    project = create_project(tmp_path / "app")
+    project = create_project(ProjectCreationRequest(tmp_path / "app"))
     dependency = Dependency(
         name="legacy",
         source="path",
@@ -134,7 +135,7 @@ def test_dependency_ecf_cannot_escape_package_root(tmp_path: Path) -> None:
 
 
 def test_install_rejects_lock_with_missing_transitive_package(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "app")
+    project = create_project(ProjectCreationRequest(tmp_path / "app"))
     package = LockedPackage(
         name="json",
         version="1.0.0",
@@ -150,7 +151,7 @@ def test_install_rejects_lock_with_missing_transitive_package(tmp_path: Path) ->
 
 
 def test_install_rejects_missing_path_without_writing_state(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "app")
+    project = create_project(ProjectCreationRequest(tmp_path / "app"))
     package = LockedPackage(
         name="shared",
         version="1.0.0",
@@ -166,7 +167,7 @@ def test_install_rejects_missing_path_without_writing_state(tmp_path: Path) -> N
 
 
 def test_offline_install_reports_missing_git_identity(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "app")
+    project = create_project(ProjectCreationRequest(tmp_path / "app"))
     package = LockedPackage(
         name="json",
         version="1.0.0",
@@ -182,7 +183,7 @@ def test_offline_install_reports_missing_git_identity(tmp_path: Path) -> None:
 
 
 def test_offline_iron_install_materializes_from_verified_archive(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "app")
+    project = create_project(ProjectCreationRequest(tmp_path / "app"))
     package, archive = _cached_iron_package(project, "json")
     lock = LockFile(manifest_fingerprint(project), (package,))
 
@@ -195,7 +196,7 @@ def test_offline_iron_install_materializes_from_verified_archive(tmp_path: Path)
 
 
 def test_offline_iron_install_rejects_corrupted_archive(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "app")
+    project = create_project(ProjectCreationRequest(tmp_path / "app"))
     package, archive = _cached_iron_package(project, "json")
     archive.write_bytes(b"corrupted")
     lock = LockFile(manifest_fingerprint(project), (package,))
@@ -205,7 +206,7 @@ def test_offline_iron_install_rejects_corrupted_archive(tmp_path: Path) -> None:
 
 
 def test_install_repairs_modified_materialized_package_offline(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "app")
+    project = create_project(ProjectCreationRequest(tmp_path / "app"))
     package, _ = _cached_iron_package(project, "json")
     lock = LockFile(manifest_fingerprint(project), (package,))
     install_dependencies(project, lock=lock, offline=True)
@@ -218,7 +219,7 @@ def test_install_repairs_modified_materialized_package_offline(tmp_path: Path) -
 
 
 def test_install_rejects_unsupported_locked_source_and_cleans_staging(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "app")
+    project = create_project(ProjectCreationRequest(tmp_path / "app"))
     package = LockedPackage(name="json", version="1.0.0", source="unknown")
     lock = LockFile(manifest_fingerprint(project), (package,))
 
@@ -230,7 +231,7 @@ def test_install_rejects_unsupported_locked_source_and_cleans_staging(tmp_path: 
 
 
 def test_install_writes_each_materialized_package_once_to_state(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "app")
+    project = create_project(ProjectCreationRequest(tmp_path / "app"))
     first, _ = _cached_iron_package(project, "first")
     second, _ = _cached_iron_package(project, "second")
     lock = LockFile(manifest_fingerprint(project), (first, second))
@@ -243,9 +244,11 @@ def test_install_writes_each_materialized_package_once_to_state(tmp_path: Path) 
 
 
 def test_git_tree_mismatch_is_rejected_before_materialization(tmp_path: Path) -> None:
-    repository = create_project(tmp_path / "library", library=True).directory
+    repository = create_project(
+        ProjectCreationRequest(tmp_path / "library", LIBRARY_TEMPLATE)
+    ).directory
     _initialize_repository(repository)
-    project = create_project(tmp_path / "app")
+    project = create_project(ProjectCreationRequest(tmp_path / "app"))
     dependency = Dependency(
         name="library",
         source="git",
@@ -265,20 +268,20 @@ def test_git_tree_mismatch_is_rejected_before_materialization(tmp_path: Path) ->
 
 
 def _project_with_diamond_dependencies(tmp_path: Path, *, conflicting: bool) -> Project:
-    shared = create_project(tmp_path / "shared", library=True)
-    alternative = create_project(tmp_path / "alternative", library=True)
+    shared = create_project(ProjectCreationRequest(tmp_path / "shared", LIBRARY_TEMPLATE))
+    alternative = create_project(ProjectCreationRequest(tmp_path / "alternative", LIBRARY_TEMPLATE))
     alternative_manifest = alternative.manifest_path
     alternative_manifest.write_text(
         alternative_manifest.read_text()
         .replace('name = "alternative"', 'name = "shared"')
         .replace('version = "0.1.0"', 'version = "2.0.0"')
     )
-    left = create_project(tmp_path / "left", library=True)
-    right = create_project(tmp_path / "right", library=True)
+    left = create_project(ProjectCreationRequest(tmp_path / "left", LIBRARY_TEMPLATE))
+    right = create_project(ProjectCreationRequest(tmp_path / "right", LIBRARY_TEMPLATE))
     _append_dependency(left, 'shared = { path = "../shared" }')
     right_source = "../alternative" if conflicting else "../shared"
     _append_dependency(right, f'shared = {{ path = "{right_source}" }}')
-    project = create_project(tmp_path / "app")
+    project = create_project(ProjectCreationRequest(tmp_path / "app"))
     _append_dependencies(
         project,
         ['left = { path = "../left" }', 'right = { path = "../right" }'],

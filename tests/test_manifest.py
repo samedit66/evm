@@ -6,8 +6,8 @@ import pytest
 
 from evm.errors import EvmError
 from evm.manifest import load_manifest, parse_manifest
-from evm.project import (
-    create_project,
+from evm.project.creation import ProjectCreationRequest, create_project
+from evm.project.workflow import (
     effective_sources,
     target_chain,
     validate_configuration,
@@ -15,7 +15,7 @@ from evm.project import (
 
 
 def test_manifest_rejects_unknown_requires_key(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     path = project.manifest_path
     path.write_text(path.read_text() + '\n[requires]\ndebugger = "yes"\n')
 
@@ -38,7 +38,7 @@ def test_manifest_rejects_implicit_runtime_dependencies(
     section: str,
     declaration: str,
 ) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     project.manifest_path.write_text(
         project.manifest_path.read_text() + f"\n[{section}]\n{declaration}\n"
     )
@@ -59,7 +59,7 @@ def test_manifest_rejects_reserved_runtime_group_names(
     tmp_path: Path,
     declaration: str,
 ) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     project.manifest_path.write_text(
         project.manifest_path.read_text() + f"\n[dependencies]\n{declaration}\n"
     )
@@ -80,7 +80,7 @@ def test_manifest_allows_non_runtime_dependency_aliases(
     tmp_path: Path,
     declaration: str,
 ) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     project.manifest_path.write_text(
         project.manifest_path.read_text() + f"\n[dependencies]\n{declaration}\n"
     )
@@ -92,7 +92,9 @@ def test_manifest_allows_non_runtime_dependency_aliases(
 
 @pytest.mark.parametrize("constraint", ["^25.12", "~25.12", "25.12", ">=25.x"])
 def test_manifest_rejects_invalid_version_constraints(tmp_path: Path, constraint: str) -> None:
-    project = create_project(tmp_path / constraint.replace(".", "_").replace(">", "x"))
+    project = create_project(
+        ProjectCreationRequest(tmp_path / constraint.replace(".", "_").replace(">", "x"))
+    )
     path = project.manifest_path
     path.write_text(path.read_text() + f'\n[compatibility]\ncompilers = ["ise {constraint}"]\n')
 
@@ -101,7 +103,7 @@ def test_manifest_rejects_invalid_version_constraints(tmp_path: Path, constraint
 
 
 def test_target_inheritance_is_normalized(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     path = project.manifest_path
     path.write_text(
         path.read_text()
@@ -121,7 +123,7 @@ def test_target_inheritance_is_normalized(tmp_path: Path) -> None:
 
 
 def test_manifest_uses_declared_default_target(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     path = project.manifest_path
     path.write_text(
         path.read_text()
@@ -136,7 +138,7 @@ def test_manifest_uses_declared_default_target(tmp_path: Path) -> None:
 
 
 def test_target_cycle_is_rejected(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     path = project.manifest_path
     path.write_text(
         path.read_text() + '\n[targets.a]\nextends = "b"\n' + '\n[targets.b]\nextends = "a"\n'
@@ -149,7 +151,7 @@ def test_target_cycle_is_rejected(tmp_path: Path) -> None:
 def test_condition_values_are_closed_where_portability_requires_it(
     tmp_path: Path,
 ) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     path = project.manifest_path
     path.write_text(
         path.read_text() + '\n[[conditions]]\nwhen = { compiler = "gec" }\n' + 'sources = ["src"]\n'
@@ -167,7 +169,7 @@ def test_parse_manifest_reports_invalid_toml_with_source_path(tmp_path: Path) ->
 
 
 def test_managed_ecf_must_stay_inside_project(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     path = project.manifest_path
     path.write_text(path.read_text().replace('ecf = "hello.ecf"', 'ecf = "../outside.ecf"'))
 
@@ -176,7 +178,7 @@ def test_managed_ecf_must_stay_inside_project(tmp_path: Path) -> None:
 
 
 def test_ecf_include_must_stay_inside_project(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     path = project.manifest_path
     path.write_text(path.read_text() + '\n[ecf]\ninclude = ["../outside.xml"]\n')
 
@@ -185,7 +187,7 @@ def test_ecf_include_must_stay_inside_project(tmp_path: Path) -> None:
 
 
 def test_release_is_a_valid_explicit_target_name(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     path = project.manifest_path
     path.write_text(path.read_text() + '\n[targets.release]\nextends = "default"\n')
 
@@ -195,7 +197,7 @@ def test_release_is_a_valid_explicit_target_name(tmp_path: Path) -> None:
 
 
 def test_manifest_parses_explicit_autotest_runner(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     path = project.manifest_path
     path.write_text(
         path.read_text()
@@ -210,7 +212,7 @@ def test_manifest_parses_explicit_autotest_runner(tmp_path: Path) -> None:
 
 
 def test_manifest_rejects_unknown_test_runner(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     path = project.manifest_path
     path.write_text(
         path.read_text()
@@ -299,7 +301,7 @@ def test_manifest_rejects_invalid_section_boundaries(
     addition: str,
     message: str,
 ) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     project.manifest_path.write_text(addition + "\n" + project.manifest_path.read_text())
 
     with pytest.raises(EvmError, match=message):
@@ -327,7 +329,7 @@ def test_manifest_rejects_invalid_project_metadata(
     new: str,
     message: str,
 ) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     content = project.manifest_path.read_text()
     if old == "uuid = ":
         line = next(line for line in content.splitlines() if line.startswith("uuid = "))

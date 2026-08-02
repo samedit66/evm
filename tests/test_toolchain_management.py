@@ -18,7 +18,7 @@ from evm.cli import main
 from evm.errors import EvmError
 from evm.lockfile import LockedToolchain, LockFile, load_lock, serialize_lock
 from evm.manifest import load_manifest
-from evm.project import create_project
+from evm.project.creation import ProjectCreationRequest, create_project
 from evm.toolchain_commands import (
     configure_project_toolchains,
     locked_toolchains_for_current_platform,
@@ -743,7 +743,7 @@ def test_locked_installation_uses_exact_cached_artifact(
 
 
 def test_manifest_toolchain_configuration_and_validation(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     path = project.manifest_path
     path.write_text(
         path.read_text()
@@ -775,7 +775,7 @@ def test_manifest_rejects_invalid_toolchain_policy(
     declaration: str,
     message: str,
 ) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     project.manifest_path.write_text(
         project.manifest_path.read_text() + f"\n[toolchain]\n{declaration}\n"
     )
@@ -817,7 +817,7 @@ def test_configure_project_toolchains_writes_exact_policy_and_lock(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     platform = current_toolchain_platform()
 
     def resolve(
@@ -853,7 +853,7 @@ def test_project_configuration_commands_reject_missing_and_duplicate_policy(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     with pytest.raises(EvmError, match="at least one"):
         configure_project_toolchains(project, ())
     with pytest.raises(EvmError, match="does not configure"):
@@ -897,7 +897,7 @@ def test_toolchain_cli_matrix_build_runs_selected_toolchains(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     monkeypatch.chdir(project.directory)
     compiled: list[str | None] = []
 
@@ -920,7 +920,7 @@ def test_toolchain_all_builds_every_installed_revision(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     monkeypatch.chdir(project.directory)
     older = _managed_installation(tmp_path / "store", "gobo", "26.05", "26.05.1")
     newer = _managed_installation(tmp_path / "store", "gobo", "26.06", "26.06.1")
@@ -958,7 +958,7 @@ def test_toolchain_cli_lists_available_releases_in_text_and_json(
         calls.append(provider)
         return (artifact,) if provider == "gobo" else ()
 
-    monkeypatch.setattr("evm.cli.available_artifacts", available)
+    monkeypatch.setattr("evm.toolchain_cli.available_artifacts", available)
     runner = CliRunner()
 
     text_result = runner.invoke(main, ["toolchain", "list", "--available"])
@@ -975,9 +975,9 @@ def test_toolchain_cli_lists_empty_and_text_installations(
 ) -> None:
     installation = _managed_installation(tmp_path / "store", "gobo", "26.06", "26.06.30")
     runner = CliRunner()
-    monkeypatch.setattr("evm.cli.list_installations", lambda: ())
+    monkeypatch.setattr("evm.toolchain_cli.list_installations", lambda: ())
     empty = runner.invoke(main, ["toolchain", "list"])
-    monkeypatch.setattr("evm.cli.list_installations", lambda: (installation,))
+    monkeypatch.setattr("evm.toolchain_cli.list_installations", lambda: (installation,))
     listed = runner.invoke(main, ["toolchain", "list", "gobo"])
 
     assert "No EVM-managed" in empty.output
@@ -1004,7 +1004,7 @@ def test_toolchain_install_cli_installs_direct_and_project_locked(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     monkeypatch.chdir(project.directory)
     installation = _managed_installation(tmp_path / "store", "gobo", "26.06", "26.06.30")
     direct_calls: list[str] = []
@@ -1013,12 +1013,12 @@ def test_toolchain_install_cli_installs_direct_and_project_locked(
         direct_calls.append(f"{selector}:{offline}")
         return installation
 
-    monkeypatch.setattr("evm.cli.install_toolchain", install)
+    monkeypatch.setattr("evm.toolchain_cli.install_toolchain", install)
     runner = CliRunner()
     direct = runner.invoke(main, ["toolchain", "install", "gobo", "--offline"])
 
     monkeypatch.setattr(
-        "evm.cli._install_project_toolchains",
+        "evm.toolchain_cli._install_project_toolchains",
         lambda selected_project, *, locked, offline: (installation,),
     )
     project_result = runner.invoke(
@@ -1034,7 +1034,7 @@ def test_toolchain_use_cli_updates_and_optionally_installs(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     project.manifest_path.write_text(
         project.manifest_path.read_text()
         + '\n[toolchain]\ndefault = "gobo@26.06"\nmatrix = ["gobo@26.06"]\n'
@@ -1043,10 +1043,10 @@ def test_toolchain_use_cli_updates_and_optionally_installs(
     monkeypatch.chdir(project.directory)
     installation = _managed_installation(tmp_path / "store", "gobo", "26.06", "26.06.30")
     monkeypatch.setattr(
-        "evm.cli.configure_project_toolchains",
+        "evm.toolchain_cli.configure_project_toolchains",
         lambda selected_project, selectors: (proposed, LockFile("x", ())),
     )
-    monkeypatch.setattr("evm.cli.install_toolchain", lambda selector: installation)
+    monkeypatch.setattr("evm.toolchain_cli.install_toolchain", lambda selector: installation)
 
     result = CliRunner().invoke(main, ["toolchain", "use", "gobo@latest", "--install"])
 
@@ -1059,7 +1059,7 @@ def test_toolchain_remove_cli_protects_project_matrix_and_force_removes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     project.manifest_path.write_text(
         project.manifest_path.read_text()
         + '\n[toolchain]\ndefault = "gobo@26.06"\nmatrix = ["gobo@26.06"]\n'
@@ -1067,9 +1067,9 @@ def test_toolchain_remove_cli_protects_project_matrix_and_force_removes(
     monkeypatch.chdir(project.directory)
     installation = _managed_installation(tmp_path / "store", "gobo", "26.06", "26.06.30")
     removed: list[str] = []
-    monkeypatch.setattr("evm.cli.select_installation", lambda selector: installation)
+    monkeypatch.setattr("evm.toolchain_cli.select_installation", lambda selector: installation)
     monkeypatch.setattr(
-        "evm.cli.remove_installation", lambda selected: removed.append(selected.identity)
+        "evm.toolchain_cli.remove_installation", lambda selected: removed.append(selected.identity)
     )
     runner = CliRunner()
 
@@ -1087,13 +1087,13 @@ def test_toolchain_verify_cli_reports_success_failure_and_json(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     installation = _managed_installation(tmp_path / "store", "gobo", "26.06", "26.06.30")
-    monkeypatch.setattr("evm.cli.list_installations", lambda: (installation,))
+    monkeypatch.setattr("evm.toolchain_cli.list_installations", lambda: (installation,))
     runner = CliRunner()
 
-    monkeypatch.setattr("evm.cli.verify_installation", lambda selected: ())
+    monkeypatch.setattr("evm.toolchain_cli.verify_installation", lambda selected: ())
     passed = runner.invoke(main, ["toolchain", "verify"])
     passed_json = runner.invoke(main, ["toolchain", "verify", "--json"])
-    monkeypatch.setattr("evm.cli.verify_installation", lambda selected: ("broken",))
+    monkeypatch.setattr("evm.toolchain_cli.verify_installation", lambda selected: ("broken",))
     failed = runner.invoke(main, ["toolchain", "verify"])
 
     assert "passed" in passed.output
@@ -1107,7 +1107,7 @@ def test_toolchain_verify_cli_validates_selection_and_empty_store(
 ) -> None:
     runner = CliRunner()
     conflict = runner.invoke(main, ["toolchain", "verify", "gobo", "--project"])
-    monkeypatch.setattr("evm.cli.list_installations", lambda: ())
+    monkeypatch.setattr("evm.toolchain_cli.list_installations", lambda: ())
     empty = runner.invoke(main, ["toolchain", "verify"])
 
     assert "mutually exclusive" in conflict.output
@@ -1119,7 +1119,7 @@ def test_toolchain_env_cli_uses_single_installation_without_project(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     installation = _managed_installation(tmp_path / "store", "gobo", "26.06", "26.06.30")
-    monkeypatch.setattr("evm.cli.list_installations", lambda: (installation,))
+    monkeypatch.setattr("evm.toolchain_cli.list_installations", lambda: (installation,))
     monkeypatch.chdir(tmp_path)
 
     result = CliRunner().invoke(main, ["toolchain", "env", "--shell", "dotenv"])
@@ -1132,7 +1132,7 @@ def test_matrix_commands_validate_all_and_aggregate_failures(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     monkeypatch.chdir(project.directory)
 
     def fail_gobo(project, request, check_only=False, *, announce=True):
@@ -1175,7 +1175,7 @@ def test_locked_toolchain_filter_uses_current_platform() -> None:
 
 
 def test_installed_checksum_is_persisted_in_project_lock(tmp_path: Path) -> None:
-    project = create_project(tmp_path / "hello")
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     platform = current_toolchain_platform()
     locked = LockedToolchain(
         "gobo",

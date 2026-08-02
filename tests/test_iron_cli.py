@@ -6,11 +6,12 @@ from click.testing import CliRunner
 
 from evm.cli import main
 from evm.manifest import load_manifest
-from evm.project import create_project
+from evm.project.creation import ProjectCreationRequest, create_project
+from evm.project.templates import LIBRARY_TEMPLATE
 
 
 def test_import_package_iron_selects_project_and_preserves_metadata(tmp_path: Path) -> None:
-    source_project = create_project(tmp_path / "source", library=True)
+    source_project = create_project(ProjectCreationRequest(tmp_path / "source", LIBRARY_TEMPLATE))
     package = source_project.directory / "package.iron"
     package.write_text(
         """package json
@@ -51,7 +52,7 @@ end
 
 
 def test_import_package_iron_requires_project_for_multiple_ecfs(tmp_path: Path) -> None:
-    source = create_project(tmp_path / "source", library=True)
+    source = create_project(ProjectCreationRequest(tmp_path / "source", LIBRARY_TEMPLATE))
     package = source.directory / "package.iron"
     package.write_text(
         'package source\nproject\n    first = "source.ecf"\n    second = "source.ecf"\nend\n'
@@ -68,7 +69,7 @@ def test_import_package_iron_requires_project_for_multiple_ecfs(tmp_path: Path) 
 
 
 def test_import_package_iron_does_not_execute_setup(tmp_path: Path) -> None:
-    source = create_project(tmp_path / "source", library=True)
+    source = create_project(ProjectCreationRequest(tmp_path / "source", LIBRARY_TEMPLATE))
     package = source.directory / "package.iron"
     package.write_text(
         "package source\nproject\n"
@@ -87,7 +88,7 @@ def test_import_package_iron_does_not_execute_setup(tmp_path: Path) -> None:
 
 
 def test_import_package_iron_reports_unknown_notes_as_partial(tmp_path: Path) -> None:
-    source = create_project(tmp_path / "source", library=True)
+    source = create_project(ProjectCreationRequest(tmp_path / "source", LIBRARY_TEMPLATE))
     package = source.directory / "package.iron"
     package.write_text(
         "package source\nproject\n"
@@ -106,7 +107,7 @@ def test_import_package_iron_reports_unknown_notes_as_partial(tmp_path: Path) ->
 
 
 def test_iron_export_refuses_overwrite_and_supports_check(tmp_path: Path, monkeypatch) -> None:
-    project = create_project(tmp_path / "example", library=True)
+    project = create_project(ProjectCreationRequest(tmp_path / "example", LIBRARY_TEMPLATE))
     monkeypatch.chdir(project.directory)
     runner = CliRunner()
 
@@ -131,7 +132,7 @@ def test_iron_export_refuses_overwrite_and_supports_check(tmp_path: Path, monkey
 
 
 def test_check_validates_existing_package_iron(tmp_path: Path, monkeypatch) -> None:
-    project = create_project(tmp_path / "example", library=True)
+    project = create_project(ProjectCreationRequest(tmp_path / "example", LIBRARY_TEMPLATE))
     (project.directory / "package.iron").write_text(
         'package different\nproject\n    example = "missing.ecf"\nend\n'
     )
