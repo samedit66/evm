@@ -14,8 +14,14 @@ concurrency:
 
 jobs:
   python-ci:
-    name: Python CI
-    runs-on: ubuntu-latest
+    name: Python CI (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-14
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -33,6 +39,47 @@ jobs:
 
       - name: Run required checks
         run: make ci
+
+  repository-install-ci:
+    name: Repository install (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+          - macos-14
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          version: 0.11.24
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+
+      - name: Install EVM from the repository
+        run: uv tool install .
+
+      - name: Verify the installed command
+        run: |
+          evm --version
+          evm --help
+          evm discover --json
+
+      - name: Create a smoke-test project
+        run: evm new .ci-smoke-project
+
+      - name: Validate the smoke-test project
+        working-directory: .ci-smoke-project
+        run: evm check --configuration-only
 
   toolchain-ci:
     name: ${{ matrix.name }}
@@ -62,6 +109,11 @@ jobs:
             adapter: gobo
             version: "26.03"
             cache-version: 26.03.05-5396cca
+          - name: Gobo 26.06 on macOS
+            os: macos-14
+            adapter: gobo
+            version: "26.06"
+            cache-version: 26.06.30-ae3f1ee
 
     steps:
       - name: Check out repository
@@ -151,6 +203,21 @@ jobs:
           7z x $archive "-o$root" -y
           if ($LASTEXITCODE -ne 0) { throw "Gobo extraction failed" }
 
+      - name: Install Gobo on macOS
+        if: runner.os == 'macOS' && matrix.adapter == 'gobo' && steps.toolchain-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TOOL_CACHE/evm/gobo-${{ matrix.cache-version }}"
+          archive="$RUNNER_TEMP/gobo-macos-arm64-26.06.30+ae3f1ee.tar.xz"
+          mkdir -p "$root"
+          curl --fail --location --retry 3 \
+            --output "$archive" \
+            "https://github.com/gobo-eiffel/gobo/releases/download/gobo-26.06/gobo-macos-arm64-26.06.30%2Bae3f1ee.tar.xz"
+          echo "2aaa969f8236134bcfc11c14620d728580b53527d15c92eb444d2142fa809ce5  $archive" \
+            | shasum -a 256 --check
+          tar --extract --xz --file "$archive" --directory "$root"
+
       - name: Configure EiffelStudio on Ubuntu
         if: runner.os == 'Linux' && matrix.adapter == 'ise'
         shell: bash
@@ -191,6 +258,18 @@ jobs:
           echo "GOBO=$gobo" >> "$GITHUB_ENV"
           dirname "$compiler" >> "$GITHUB_PATH"
 
+      - name: Configure Gobo on macOS
+        if: runner.os == 'macOS' && matrix.adapter == 'gobo'
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TOOL_CACHE/evm/gobo-${{ matrix.cache-version }}"
+          compiler="$(find "$root" -type f -path '*/bin/gec' -print -quit)"
+          test -n "$compiler"
+          gobo="$(dirname "$(dirname "$compiler")")"
+          echo "GOBO=$gobo" >> "$GITHUB_ENV"
+          dirname "$compiler" >> "$GITHUB_PATH"
+
       - name: Configure Gobo on Windows
         if: runner.os == 'Windows' && matrix.adapter == 'gobo'
         shell: pwsh
@@ -213,8 +292,8 @@ jobs:
         shell: bash
         run: mkdir -p .ci
 
-      - name: Verify toolchain on Ubuntu
-        if: runner.os == 'Linux'
+      - name: Verify toolchain on Unix
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           set -euo pipefail

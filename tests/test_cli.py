@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import click
 import pytest
 from click.testing import CliRunner
 from lxml import etree
@@ -587,23 +588,51 @@ def test_import_rejects_application_root_without_creation_feature(
     assert "root must define a creation feature" in result.output
 
 
-def test_main_help_lists_stage_one_commands() -> None:
+def test_main_help_matches_public_command_contract() -> None:
     result = CliRunner().invoke(main, ["--help"])
 
     assert result.exit_code == 0
-    for command in (
-        "new",
-        "init",
-        "check",
+    expected_commands = {
+        "add",
         "build",
-        "run",
+        "check",
+        "clean",
+        "deps",
         "discover",
+        "doc",
         "explain",
         "import",
+        "init",
+        "install",
+        "iron",
         "lint",
-        "doc",
-    ):
+        "new",
+        "remove",
+        "run",
+        "task",
+        "test",
+        "toolchain",
+        "update",
+    }
+
+    assert set(main.commands) == expected_commands
+    for command in expected_commands:
         assert command in result.output
+
+    toolchain = main.commands["toolchain"]
+    iron = main.commands["iron"]
+    assert isinstance(toolchain, click.Group)
+    assert isinstance(iron, click.Group)
+    assert set(toolchain.commands) == {
+        "env",
+        "install",
+        "link",
+        "list",
+        "remove",
+        "use",
+        "verify",
+    }
+    assert set(iron.commands) == {"export"}
 
 
 def test_lint_command_forwards_backend_options(tmp_path: Path, monkeypatch) -> None:

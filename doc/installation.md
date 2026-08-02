@@ -12,12 +12,33 @@ require a native C toolchain.
 
 ## Install from the repository
 
-EVM is not yet presented as a stable published package. From the repository
-root, install it as an isolated command with `uv`:
+Install the current development version directly from GitHub as an isolated
+command with `uv`:
 
 ```console
-$ uv tool install .
+$ uv tool install "git+https://github.com/samedit66/evm.git"
 $ evm --version
+```
+
+Pin a known commit for a reproducible installation:
+
+```console
+$ uv tool install "git+https://github.com/samedit66/evm.git@<commit-sha>"
+```
+
+Upgrade to the current repository head explicitly:
+
+```console
+$ uv tool install --force "git+https://github.com/samedit66/evm.git"
+```
+
+To inspect the source before installation, clone the repository and install
+from its root:
+
+```console
+$ git clone https://github.com/samedit66/evm.git
+$ cd evm
+$ uv tool install .
 ```
 
 To run EVM from a development checkout:

@@ -17,28 +17,30 @@ Eiffel into one workflow without replacing the native Eiffel ecosystem.
 
 [Quick start](#quick-start) ·
 [Documentation](doc/) ·
-[CLI reference](doc/cli-reference.md) ·
-[`SPEC.md`](SPEC.md)
+[CLI reference](doc/cli-reference.md)
 
 </div>
 
 > [!IMPORTANT]
-> EVM is under active development. The current package version is `0.1.0`;
-> the CLI and manifest format may evolve. [`SPEC.md`](SPEC.md) is the source of
-> truth for product requirements and behavior.
+> EVM is a very young project under active development. The current version is
+> `0.1.0`, and some interfaces may still evolve. Testing on real Eiffel
+> projects is especially valuable at this stage; bug reports, use cases, and
+> any other feedback are very welcome.
 
 ## Installation
 
-EVM requires Python 3.11 or newer. Until a stable package is published, install
-the command directly from the repository with
+EVM requires Python 3.11 or newer. Install the command directly from the GitHub
+repository with
 [`uv`](https://docs.astral.sh/uv/):
 
 ```console
-git clone https://github.com/samedit66/evm.git
-cd evm
-uv tool install .
+uv tool install "git+https://github.com/samedit66/evm.git"
 evm --version
 ```
+
+For a reproducible installation, append a commit SHA or release tag to the Git
+URL. See [Installation](doc/installation.md) for pinned and checkout-based
+installation.
 
 For development from a checkout:
 
@@ -272,6 +274,7 @@ safe legacy workflow.
 | [Installation](doc/installation.md) | Installation and environment diagnosis |
 | [Projects and manifests](doc/projects.md) | Project layout, targets, build modes, and daily workflow |
 | [Manifest reference](doc/manifest-reference.md) | `Eiffel.toml` sections, fields, and inferred defaults |
+| [Compatibility contract](doc/compatibility.md) | Stability guarantees for CLI and project files |
 | [Package management](doc/dependencies.md) | Sources, locking, updates, offline use, and graph inspection |
 | [Toolchains](doc/toolchains.md) | Discovery, installation, selection, matrices, and capabilities |
 | [Migrating existing projects](doc/migrating-existing-projects.md) | Adopt EVM without replacing an existing ECF |
@@ -294,8 +297,10 @@ Gobo adapters, dependency resolution and locking, managed and linked
 toolchains, project compilation matrices, testing, tasks, IRON interoperability,
 and multi-package workspaces.
 
-For normative behavior, design boundaries, and acceptance criteria, see
-[`SPEC.md`](SPEC.md).
+This is still a very young project. Testing against existing Eiffel codebases
+is useful even when a workflow is not yet fully supported. I am glad to receive
+bug reports, compatibility findings, workflow descriptions, and any other
+feedback through the GitHub repository.
 
 ## License
 

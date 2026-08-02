@@ -67,6 +67,8 @@ $ uv run --frozen pytest -m "toolchain and gobo"
 The ISE tests require `ec` in `PATH`. The Gobo tests require `gec` in `PATH`
 and `GOBO` set to the distribution directory. GitHub Actions runs both groups
 with EiffelStudio 25.12 revision 98922 and Gobo 26.03.05 on Ubuntu and Windows.
+It additionally runs Gobo 26.06.30 on macOS arm64. The platform-independent
+Python suite and repository-install smoke test run on macOS as well.
 When updating a CI toolchain, update its archive URL, expected version, SHA-256,
 and cache key together in `.github/workflows/ci.yml`.
 
