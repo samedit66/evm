@@ -106,6 +106,32 @@ Use an exact selector such as `gobo@26.06` when the version matters. See
 [Toolchains](doc/toolchains.md) for linked installations, project matrices,
 locked installation, offline use, and environment setup.
 
+### Test across Eiffel compilers
+
+The same project can be checked with both Gobo Eiffel and ISE Eiffel without
+changing its ECF or shell environment. Try one compiler, name several, or run
+the project's complete compiler matrix:
+
+```console
+evm test --toolchain gobo
+evm test --toolchain gobo@26.06 --toolchain ise@25.12
+evm test --toolchain all
+```
+
+For a reproducible team and CI setup, pin the exact toolchains with
+`evm toolchain use gobo@26.06 ise@25.12`. EVM records the first as the default
+and writes the policy to `Eiffel.toml` (with exact artifacts in `Eiffel.lock`):
+
+```toml
+[toolchain]
+default = "gobo@26.06"
+matrix = ["gobo@26.06", "ise@25.12"]
+```
+
+Now plain `evm build` uses the pinned default, while `evm check --toolchain all`
+or `evm test --toolchain all` catches portability differences across the whole
+matrix before they reach another developer or CI.
+
 ### Create a project
 
 Turn the same workflow into a reproducible application project:
