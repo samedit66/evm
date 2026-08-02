@@ -22,9 +22,8 @@ Eiffel into one workflow without replacing the native Eiffel ecosystem.
 </div>
 
 > [!IMPORTANT]
-> EVM is a very young project under active development. The current version is
-> `0.1.0`, and some interfaces may still evolve. Testing on real Eiffel
-> projects is especially valuable at this stage; bug reports, use cases, and
+> EVM is a very young project under active development. Some interfaces may still evolve.
+> Testing on real Eiffel projects is especially valuable at this stage; bug reports, use cases, and
 > any other feedback are very welcome.
 
 ## Installation
