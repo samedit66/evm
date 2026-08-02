@@ -37,6 +37,7 @@ _GIT_TIMEOUT_SECONDS = 120
 
 @dataclass(frozen=True)
 class _ResolutionState:
+    root: Project
     project: Project
     resolved: dict[str, LockedPackage]
     resolving: list[str]
@@ -66,7 +67,7 @@ def resolve_dependencies(
 ) -> LockFile:
     resolved: dict[str, LockedPackage] = {}
     resolving: list[str] = []
-    state = _ResolutionState(project, resolved, resolving, offline, previous)
+    state = _ResolutionState(project, project, resolved, resolving, offline, previous)
     for dependency in project.dependencies:
         ensure_dependency_is_not_implicit_runtime(dependency)
     selected = [
@@ -108,6 +109,7 @@ def install_dependencies(
     selected_lock = lock or load_lock(project.directory / LOCK_NAME)
     ensure_lock_matches(project, selected_lock)
     _ensure_lock_graph_complete(selected_lock)
+    _ensure_live_path_graph_matches(project, selected_lock)
     evm_directory = project.state_directory
     lock_directory = evm_directory / "locks"
     lock_directory.mkdir(parents=True, exist_ok=True)
@@ -197,12 +199,7 @@ def _resolve_dependency(
         cycle = " -> ".join((*state.resolving, dependency.name))
         raise EvmError(f"dependency cycle detected: {cycle}")
     state.resolving.append(dependency.name)
-    package, nested_project, discovered = _resolve_one(
-        state.project,
-        dependency,
-        offline=state.offline,
-        previous=state.previous,
-    )
+    package, nested_project, discovered = _resolve_one(dependency, state)
     existing = state.resolved.get(package.name)
     if existing is not None and _package_identity(existing) != _package_identity(package):
         raise EvmError(f"dependency conflict for {package.name}: incompatible sources or versions")
@@ -217,7 +214,16 @@ def _resolve_dependency(
     nested_names: list[str] = []
     owner = nested_project or state.project
     for nested_dependency in nested_dependencies:
-        _resolve_dependency(nested_dependency, replace(state, project=owner))
+        if nested_dependency.source == "path" and _is_downloaded_project(owner, state.root):
+            raise EvmError(
+                f"downloaded package {package.name} declares path dependency "
+                f"{nested_dependency.name}; use a downloadable source"
+            )
+        reachable_dependency = replace(
+            nested_dependency,
+            development=dependency.development or nested_dependency.development,
+        )
+        _resolve_dependency(reachable_dependency, replace(state, project=owner))
         nested_names.append(nested_dependency.name)
     state.resolved[package.name] = replace(
         package,
@@ -227,15 +233,13 @@ def _resolve_dependency(
 
 
 def _resolve_one(
-    project: Project,
     dependency: Dependency,
-    *,
-    offline: bool,
-    previous: LockFile | None,
+    state: _ResolutionState,
 ) -> tuple[LockedPackage, Project | None, tuple[Dependency, ...]]:
     if dependency.patched_path is not None:
         package, nested, discovered = _resolve_path(
-            project,
+            state.root,
+            state.project,
             dependency,
             dependency.patched_path,
         )
@@ -251,42 +255,50 @@ def _resolve_one(
     if dependency.source == "path":
         if dependency.path is None:
             raise AssertionError("validated path dependency has no path")
-        return _resolve_path(project, dependency, dependency.path)
+        return _resolve_path(state.root, state.project, dependency, dependency.path)
     if dependency.source == "git":
         return _resolve_git(
-            project,
+            state.root,
             dependency,
-            offline=offline,
-            previous=previous,
+            offline=state.offline,
+            previous=state.previous,
         )
     if dependency.source == "ise":
-        package, nested = _resolve_distribution(project, dependency, "ise")
+        package, nested = _resolve_distribution(state.project, dependency, "ise")
         return package, nested, ()
     if dependency.source == "gobo":
-        package, nested = _resolve_distribution(project, dependency, "gobo")
+        package, nested = _resolve_distribution(state.project, dependency, "gobo")
         return package, nested, ()
-    return _resolve_iron(project, dependency, offline=offline, previous=previous)
+    return _resolve_iron(
+        state.root,
+        dependency,
+        offline=state.offline,
+        previous=state.previous,
+    )
 
 
 def _resolve_path(
-    project: Project,
+    root_project: Project,
+    owner: Project,
     dependency: Dependency,
     raw_path: str,
 ) -> tuple[LockedPackage, Project | None, tuple[Dependency, ...]]:
-    root = (project.configuration_directory / raw_path).resolve()
+    root = (owner.configuration_directory / raw_path).resolve()
     if not root.is_dir():
         raise EvmError(f"path dependency {dependency.name} does not exist: {raw_path}")
+    normalized_path = os.path.relpath(root, root_project.configuration_directory)
+    normalized_path = Path(normalized_path).as_posix()
     nested = _load_nested_manifest(root)
     ecf = _dependency_ecf(root, dependency.ecf, nested)
     version = nested.version if nested is not None else dependency.version or "0.0.0"
     package = LockedPackage(
         name=dependency.name,
         version=version,
-        source=f"path+{raw_path}",
+        source=f"path+{normalized_path}",
         checksum=f"sha256:{_directory_hash(root)}",
         manifest="Eiffel.toml" if nested is not None else None,
         ecf=ecf,
-        path=raw_path,
+        path=normalized_path,
         path_kind="external",
         development=dependency.development,
     )
@@ -362,19 +374,28 @@ def _resolve_distribution(
     library = dependency.library or dependency.name
     package_root, ecf = _find_distribution_library(root, library, dependency.ecf)
     source = "eiffelstudio" if adapter == "ise" else "gobo-distribution"
-    locked_ecf = ecf if adapter == "ise" else f"library/{library}/{ecf}"
-    checksum_root = package_root if adapter == "ise" else root
+    path_kind = f"{adapter}-library"
+    if adapter == "ise" and _is_ise_contrib_library(root, package_root):
+        installation_root = root.parent
+        selected_ecf = package_root / ecf
+        locked_ecf = selected_ecf.relative_to(installation_root).as_posix()
+        checksum = _distribution_closure_hash(installation_root, selected_ecf)
+        path_kind = "ise-contrib-library"
+    else:
+        locked_ecf = ecf if adapter == "ise" else f"library/{library}/{ecf}"
+        checksum_root = package_root if adapter == "ise" else root
+        checksum = _directory_hash(checksum_root)
     return (
         LockedPackage(
             name=dependency.name,
             version=str(detected.version),
             source=source,
             ecf=locked_ecf,
-            path_kind=f"{adapter}-library",
+            path_kind=path_kind,
             distribution="gobo" if adapter == "gobo" else None,
             library=library,
             development=dependency.development,
-            checksum=f"sha256:{_directory_hash(checksum_root)}",
+            checksum=f"sha256:{checksum}",
         ),
         None,
     )
@@ -541,6 +562,13 @@ def _install_distribution(package: LockedPackage, destination: Path) -> None:
     root = _distribution_root(adapter)
     if adapter == "gobo":
         shutil.copytree(root, destination / "library", symlinks=True)
+        return
+    if package.path_kind == "ise-contrib-library":
+        if package.ecf is None:
+            raise EvmError(f"contrib package {package.name} has no locked ECF")
+        installation_root = root.parent
+        selected_ecf = _inside(installation_root, package.ecf, f"{package.name}.ecf")
+        _copy_distribution_closure(installation_root, selected_ecf, destination)
         return
     package_root, _ = _find_distribution_library(root, package.library or package.name, package.ecf)
     shutil.copytree(package_root, destination, symlinks=True)
@@ -741,6 +769,8 @@ def _find_distribution_library(
     requested_ecf: str | None,
 ) -> tuple[Path, str]:
     base = distribution_root / library
+    if not base.is_dir():
+        base = _find_ise_contrib_library(distribution_root, library, requested_ecf)
     if requested_ecf:
         candidate = _inside(base, requested_ecf, f"{library}.ecf")
     else:
@@ -752,6 +782,89 @@ def _find_distribution_library(
     if not candidate.is_file():
         raise EvmError(f"distribution library ECF does not exist: {candidate}")
     return base, candidate.relative_to(base).as_posix()
+
+
+def _find_ise_contrib_library(
+    distribution_root: Path,
+    library: str,
+    requested_ecf: str | None,
+) -> Path:
+    contrib = distribution_root.parent / "contrib" / "library"
+    ecf_name = requested_ecf or f"{library}.ecf"
+    matches = sorted(
+        path.parent for path in contrib.glob(f"**/{library}/{ecf_name}") if path.is_file()
+    )
+    if len(matches) != 1:
+        raise EvmError(f"cannot identify ECF for distribution library {library}")
+    return matches[0]
+
+
+def _is_ise_contrib_library(distribution_root: Path, package_root: Path) -> bool:
+    contrib = distribution_root.parent / "contrib" / "library"
+    try:
+        package_root.relative_to(contrib)
+    except ValueError:
+        return False
+    return True
+
+
+def _distribution_closure_directories(
+    installation_root: Path,
+    selected_ecf: Path,
+) -> tuple[Path, ...]:
+    pending = [selected_ecf]
+    visited: set[Path] = set()
+    directories: set[Path] = set()
+    while pending:
+        ecf = pending.pop()
+        if ecf in visited:
+            continue
+        visited.add(ecf)
+        directories.add(ecf.parent)
+        try:
+            tree = etree.parse(
+                str(ecf),
+                parser=etree.XMLParser(resolve_entities=False, no_network=True),
+            )
+        except (OSError, etree.XMLSyntaxError) as error:
+            raise EvmError(f"cannot inspect distribution ECF {ecf}: {error}") from error
+        for raw_location in tree.xpath("//*[local-name()='library']/@location"):
+            if not isinstance(raw_location, str) or raw_location.startswith("$"):
+                continue
+            location = raw_location.replace("\\", "/")
+            dependency_ecf = _inside(
+                installation_root,
+                os.path.relpath((ecf.parent / location).resolve(), installation_root),
+                "distribution library location",
+            )
+            if dependency_ecf.is_file():
+                pending.append(dependency_ecf)
+    return tuple(sorted(_outermost_directories(directories)))
+
+
+def _outermost_directories(directories: set[Path]) -> set[Path]:
+    return {
+        directory
+        for directory in directories
+        if not any(parent in directories for parent in directory.parents)
+    }
+
+
+def _distribution_closure_hash(installation_root: Path, selected_ecf: Path) -> str:
+    with tempfile.TemporaryDirectory(prefix="evm-distribution-") as temporary:
+        staged = Path(temporary)
+        _copy_distribution_closure(installation_root, selected_ecf, staged)
+        return _directory_hash(staged)
+
+
+def _copy_distribution_closure(
+    installation_root: Path,
+    selected_ecf: Path,
+    destination: Path,
+) -> None:
+    for source in _distribution_closure_directories(installation_root, selected_ecf):
+        relative = source.relative_to(installation_root)
+        shutil.copytree(source, destination / relative, symlinks=True, dirs_exist_ok=True)
 
 
 def _directory_hash(root: Path) -> str:
@@ -863,8 +976,29 @@ def _declared_source(dependency: Dependency) -> str:
     }[dependency.source]
 
 
-def _package_identity(package: LockedPackage) -> tuple[str, str, str | None]:
-    return package.source, package.version, package.revision
+def _package_identity(package: LockedPackage) -> tuple[object, ...]:
+    return (
+        package.source,
+        package.version,
+        package.revision,
+        package.tree,
+        package.checksum,
+        package.ecf,
+        package.subdir,
+        package.path,
+        package.path_kind,
+        package.distribution,
+        package.library,
+        package.patched,
+    )
+
+
+def _is_downloaded_project(project: Project, root: Project) -> bool:
+    try:
+        project.directory.relative_to(root.state_directory)
+    except ValueError:
+        return False
+    return True
 
 
 def _ensure_lock_graph_complete(lock: LockFile) -> None:
@@ -876,6 +1010,63 @@ def _ensure_lock_graph_complete(lock: LockFile) -> None:
                     f"Eiffel.lock package {package.name} is missing transitive dependency "
                     f"{dependency}"
                 )
+
+
+def _ensure_live_path_graph_matches(project: Project, lock: LockFile) -> None:
+    for package in lock.packages:
+        if package.path is None or package.manifest is None:
+            continue
+        root = (project.configuration_directory / package.path).resolve()
+        nested = _load_nested_manifest(root)
+        if nested is None:
+            raise EvmError(
+                f"path dependency {package.name} no longer contains Eiffel.toml; run `evm update`"
+            )
+        declared_names = tuple(sorted(item.name for item in nested.dependencies))
+        if declared_names != package.dependencies:
+            raise EvmError(
+                f"path dependency {package.name} changed its dependency graph; run `evm update`"
+            )
+        for dependency in nested.dependencies:
+            try:
+                locked_dependency = lock.package(dependency.name)
+            except KeyError as error:
+                raise EvmError(
+                    f"path dependency {package.name} requires missing package "
+                    f"{dependency.name}; run `evm update`"
+                ) from error
+            if not _declaration_matches_lock(project, nested, dependency, locked_dependency):
+                raise EvmError(
+                    f"path dependency {package.name} changed dependency {dependency.name}; "
+                    "run `evm update`"
+                )
+
+
+def _declaration_matches_lock(
+    root: Project,
+    owner: Project,
+    dependency: Dependency,
+    package: LockedPackage,
+) -> bool:
+    if dependency.patched_path is not None:
+        patched_root = (owner.configuration_directory / dependency.patched_path).resolve()
+        patched_path = Path(os.path.relpath(patched_root, root.configuration_directory)).as_posix()
+        return package.patched and package.path == patched_path
+    if dependency.source == "path" and dependency.path is not None:
+        dependency_root = (owner.configuration_directory / dependency.path).resolve()
+        path = Path(os.path.relpath(dependency_root, root.configuration_directory)).as_posix()
+        return package.source == f"path+{path}" and package.path == path
+    if dependency.source == "git":
+        requested = f"{dependency.requested_kind}:{dependency.requested_value}"
+        return package.source == f"git+{dependency.git}" and package.requested == requested
+    if dependency.source == "ise":
+        return package.source == "eiffelstudio" and package.library == (
+            dependency.library or dependency.name
+        )
+    if dependency.source == "gobo":
+        return package.source == "gobo-distribution" and package.library == dependency.library
+    requested = f"version:{dependency.version}"
+    return package.source.startswith("iron+") and package.requested == requested
 
 
 def _copy_locked_closure(

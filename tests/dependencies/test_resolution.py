@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+import evm.dependencies.resolution as dependencies
 from evm.dependencies.resolution import install_dependencies, resolve_dependencies
 from evm.errors import EvmError
 from evm.lockfile import LockedPackage, LockFile, manifest_fingerprint
@@ -52,6 +53,144 @@ def test_resolver_reports_dependency_cycle(tmp_path: Path) -> None:
 
     with pytest.raises(EvmError, match="dependency cycle detected: first -> second -> first"):
         resolve_dependencies(load_manifest(project.manifest_path))
+
+
+def test_resolver_distinguishes_same_relative_path_from_different_owners(
+    tmp_path: Path,
+) -> None:
+    _project_with_local_shared_dependency(tmp_path / "left")
+    right = _project_with_local_shared_dependency(tmp_path / "right")
+    (right.directory.parent / "shared" / "src" / "shared.e").write_text(
+        "class SHARED feature value: INTEGER = 2 end"
+    )
+    project = create_project(ProjectCreationRequest(tmp_path / "app"))
+    _append_dependencies(
+        project,
+        [
+            'left = { path = "../left/package" }',
+            'right = { path = "../right/package" }',
+        ],
+    )
+
+    with pytest.raises(EvmError, match="dependency conflict for shared"):
+        resolve_dependencies(load_manifest(project.manifest_path))
+
+
+def test_resolver_distinguishes_git_subpackages_at_same_revision(tmp_path: Path) -> None:
+    repository = tmp_path / "repository"
+    first = create_project(
+        ProjectCreationRequest(repository / "packages" / "first", LIBRARY_TEMPLATE)
+    )
+    second = create_project(
+        ProjectCreationRequest(repository / "packages" / "second", LIBRARY_TEMPLATE)
+    )
+    for package in (first, second):
+        package.manifest_path.write_text(
+            package.manifest_path.read_text().replace(
+                f'name = "{package.name}"',
+                'name = "shared"',
+            )
+        )
+    _initialize_repository(repository)
+    left = create_project(ProjectCreationRequest(tmp_path / "left", LIBRARY_TEMPLATE))
+    right = create_project(ProjectCreationRequest(tmp_path / "right", LIBRARY_TEMPLATE))
+    _append_dependency(
+        left,
+        f'shared = {{ git = "{repository}", branch = "main", subdir = "packages/first" }}',
+    )
+    _append_dependency(
+        right,
+        f'shared = {{ git = "{repository}", branch = "main", subdir = "packages/second" }}',
+    )
+    project = create_project(ProjectCreationRequest(tmp_path / "app"))
+    _append_dependencies(
+        project,
+        ['left = { path = "../left" }', 'right = { path = "../right" }'],
+    )
+
+    with pytest.raises(EvmError, match="dependency conflict for shared"):
+        resolve_dependencies(load_manifest(project.manifest_path))
+
+
+def test_transitive_downloaded_source_uses_root_project_state(tmp_path: Path) -> None:
+    repository = create_project(
+        ProjectCreationRequest(tmp_path / "repository", LIBRARY_TEMPLATE)
+    ).directory
+    _initialize_repository(repository)
+    parent = create_project(ProjectCreationRequest(tmp_path / "parent", LIBRARY_TEMPLATE))
+    _append_dependency(
+        parent,
+        f'child = {{ git = "{repository}", branch = "main" }}',
+    )
+    child_manifest = repository / "Eiffel.toml"
+    child_manifest.write_text(
+        child_manifest.read_text().replace('name = "repository"', 'name = "child"')
+    )
+    _git(repository, "add", ".")
+    _git(repository, "commit", "-m", "use package identity")
+    project = create_project(ProjectCreationRequest(tmp_path / "app"))
+    _append_dependency(project, 'parent = { path = "../parent" }')
+
+    resolve_dependencies(load_manifest(project.manifest_path))
+
+    assert (project.state_directory / "sources" / "git").is_dir()
+    assert not (parent.directory / ".evm").exists()
+
+
+def test_downloaded_package_rejects_transitive_path_dependency(tmp_path: Path) -> None:
+    repository = create_project(
+        ProjectCreationRequest(tmp_path / "repository", LIBRARY_TEMPLATE)
+    ).directory
+    create_project(ProjectCreationRequest(tmp_path / "shared", LIBRARY_TEMPLATE))
+    _append_dependency(load_manifest(repository / "Eiffel.toml"), 'shared = { path = "../shared" }')
+    _initialize_repository(repository)
+    project = create_project(ProjectCreationRequest(tmp_path / "app"))
+    dependency = Dependency(
+        name="repository",
+        source="git",
+        git=str(repository),
+        requested_kind="branch",
+        requested_value="main",
+    )
+
+    with pytest.raises(
+        EvmError,
+        match=r"downloaded package repository.*path dependency shared",
+    ):
+        resolve_dependencies(replace(project, dependencies=(dependency,)))
+
+
+def test_development_reachability_propagates_through_transitive_dependencies(
+    tmp_path: Path,
+) -> None:
+    helper = create_project(ProjectCreationRequest(tmp_path / "helper", LIBRARY_TEMPLATE))
+    testing = create_project(ProjectCreationRequest(tmp_path / "testing", LIBRARY_TEMPLATE))
+    _append_dependency(testing, 'helper = { path = "../helper" }')
+    project = create_project(ProjectCreationRequest(tmp_path / "app"))
+    development_dependency = Dependency(
+        name="testing",
+        source="path",
+        path="../testing",
+        development=True,
+    )
+
+    development_lock = resolve_dependencies(
+        replace(project, dependencies=(development_dependency,))
+    )
+    runtime_lock = resolve_dependencies(
+        replace(
+            project,
+            dependencies=(
+                development_dependency,
+                Dependency(name="helper", source="path", path="../helper"),
+            ),
+        )
+    )
+
+    assert development_lock.package("testing").development is True
+    assert development_lock.package("helper").development is True
+    assert runtime_lock.package("helper").development is False
+    assert helper.directory.is_dir()
 
 
 def test_selective_update_preserves_unselected_locked_closure(tmp_path: Path) -> None:
@@ -164,6 +303,106 @@ def test_install_rejects_missing_path_without_writing_state(tmp_path: Path) -> N
         install_dependencies(project, lock=lock)
 
     assert not (project.state_directory / "state.toml").exists()
+
+
+def test_install_rejects_changed_live_path_dependency_graph(tmp_path: Path) -> None:
+    create_project(ProjectCreationRequest(tmp_path / "child", LIBRARY_TEMPLATE))
+    parent = create_project(ProjectCreationRequest(tmp_path / "parent", LIBRARY_TEMPLATE))
+    project = create_project(ProjectCreationRequest(tmp_path / "app"))
+    _append_dependency(project, 'parent = { path = "../parent" }')
+    parsed = load_manifest(project.manifest_path)
+    lock = resolve_dependencies(parsed)
+    _append_dependency(parent, 'child = { path = "../child" }')
+
+    with pytest.raises(EvmError, match=r"path dependency parent.*run `evm update`"):
+        install_dependencies(parsed, lock=lock)
+
+    assert not (project.state_directory / "state.toml").exists()
+
+
+@pytest.mark.parametrize(
+    ("dependency", "package"),
+    [
+        (
+            Dependency(
+                name="shared",
+                source="git",
+                git="https://example.invalid/shared.git",
+                requested_kind="tag",
+                requested_value="v1",
+                patched_path="../shared",
+            ),
+            LockedPackage(
+                name="shared",
+                version="1",
+                source="git+https://example.invalid/shared.git",
+                path="../shared",
+                patched=True,
+            ),
+        ),
+        (
+            Dependency(name="shared", source="path", path="../shared"),
+            LockedPackage(
+                name="shared",
+                version="1",
+                source="path+../shared",
+                path="../shared",
+            ),
+        ),
+        (
+            Dependency(
+                name="shared",
+                source="git",
+                git="https://example.invalid/shared.git",
+                requested_kind="tag",
+                requested_value="v1",
+            ),
+            LockedPackage(
+                name="shared",
+                version="1",
+                source="git+https://example.invalid/shared.git",
+                requested="tag:v1",
+            ),
+        ),
+        (
+            Dependency(name="time", source="ise"),
+            LockedPackage(
+                name="time",
+                version="1",
+                source="eiffelstudio",
+                library="time",
+            ),
+        ),
+        (
+            Dependency(name="xml", source="gobo", library="xml"),
+            LockedPackage(
+                name="xml",
+                version="1",
+                source="gobo-distribution",
+                library="xml",
+            ),
+        ),
+        (
+            Dependency(name="json", source="iron", version="1"),
+            LockedPackage(
+                name="json",
+                version="1.0",
+                source="iron+repository",
+                requested="version:1",
+            ),
+        ),
+    ],
+)
+def test_live_path_dependency_declarations_match_locked_sources(
+    tmp_path: Path,
+    dependency: Dependency,
+    package: LockedPackage,
+) -> None:
+    root = create_project(ProjectCreationRequest(tmp_path / "app"))
+    owner = create_project(ProjectCreationRequest(tmp_path / "owner", LIBRARY_TEMPLATE))
+    create_project(ProjectCreationRequest(tmp_path / "shared", LIBRARY_TEMPLATE))
+
+    assert dependencies._declaration_matches_lock(root, owner, dependency, package)
 
 
 def test_offline_install_reports_missing_git_identity(tmp_path: Path) -> None:
@@ -288,6 +527,13 @@ def _project_with_diamond_dependencies(tmp_path: Path, *, conflicting: bool) -> 
     )
     assert shared.directory.is_dir()
     return load_manifest(project.manifest_path)
+
+
+def _project_with_local_shared_dependency(root: Path) -> Project:
+    create_project(ProjectCreationRequest(root / "shared", LIBRARY_TEMPLATE))
+    package = create_project(ProjectCreationRequest(root / "package", LIBRARY_TEMPLATE))
+    _append_dependency(package, 'shared = { path = "../shared" }')
+    return package
 
 
 def _append_dependency(project: Project, dependency: str) -> None:

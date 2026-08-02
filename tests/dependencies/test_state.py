@@ -165,6 +165,63 @@ def test_distribution_resolution_and_materialization(
     assert (destination / "time.ecf").is_file()
 
 
+def test_ise_distribution_finds_contrib_library_by_logical_name(tmp_path: Path) -> None:
+    library_root = tmp_path / "ise" / "library"
+    library_root.mkdir(parents=True)
+    http_client = tmp_path / "ise" / "contrib" / "library" / "network" / "http_client"
+    http_client.mkdir(parents=True)
+    (http_client / "http_client.ecf").write_text("<system/>")
+
+    package_root, ecf = dependencies._find_distribution_library(
+        library_root,
+        "http_client",
+        "http_client.ecf",
+    )
+
+    assert package_root == http_client
+    assert ecf == "http_client.ecf"
+
+
+def test_ise_contrib_distribution_materializes_relative_ecf_closure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    installation = tmp_path / "ise"
+    library_root = installation / "library"
+    library_root.mkdir(parents=True)
+    http_client = installation / "contrib" / "library" / "network" / "http_client"
+    protocol = installation / "contrib" / "library" / "network" / "protocol" / "http"
+    http_client.mkdir(parents=True)
+    protocol.mkdir(parents=True)
+    (http_client / "http_client.ecf").write_text(
+        '<system><target><library location="../protocol/http/http.ecf"/></target></system>'
+    )
+    (http_client / "http_client.e").write_text("class HTTP_CLIENT end")
+    (protocol / "http.ecf").write_text("<system/>")
+    (protocol / "http.e").write_text("class HTTP end")
+    project = create_project(ProjectCreationRequest(tmp_path / "app"))
+    dependency = Dependency(
+        name="http_client",
+        source="ise",
+        library="http_client",
+        ecf="http_client.ecf",
+    )
+    project = replace(project, dependencies=(dependency,))
+    detection = Detection(tmp_path / "ec", NumericVersion.parse("25.2.0"), None)
+    monkeypatch.setattr(dependencies, "detect", lambda _: detection)
+    monkeypatch.setattr(dependencies, "_distribution_root", lambda _: library_root)
+
+    lock = dependencies.resolve_dependencies(project)
+    dependencies.install_dependencies(project, lock=lock)
+
+    package = lock.package("http_client")
+    destination = project.state_directory / "deps" / package.materialized_name
+    assert package.path_kind == "ise-contrib-library"
+    assert package.ecf == "contrib/library/network/http_client/http_client.ecf"
+    assert (destination / package.ecf).is_file()
+    assert (destination / "contrib/library/network/protocol/http/http.ecf").is_file()
+
+
 def test_distribution_resolution_reports_detection_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
