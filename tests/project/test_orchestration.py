@@ -71,20 +71,19 @@ def test_compile_project_rejects_unknown_target(tmp_path: Path) -> None:
         compile_project(project, BuildRequest(target="missing"))
 
 
-def test_run_project_executes_first_existing_artifact(
+def test_run_project_executes_adapter_run_command(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     project = create_project(ProjectCreationRequest(tmp_path / "hello"))
     selected = _toolchain()
-    missing = tmp_path / "missing"
     executable = tmp_path / "hello-executable"
     executable.write_text("binary")
     observed: list[object] = []
     monkeypatch.setattr("evm.project.workflow.compile_project", lambda *args, **kwargs: selected)
     monkeypatch.setattr(
-        "evm.project.workflow.artifact_candidates",
-        lambda *args: (missing, executable),
+        "evm.project.workflow.run_command",
+        lambda *args: [str(executable), "--verbose"],
     )
     monkeypatch.setattr(
         "evm.project.workflow.subprocess.run",
@@ -97,7 +96,7 @@ def test_run_project_executes_first_existing_artifact(
     assert observed == [([str(executable), "--verbose"], project.directory)]
 
 
-def test_run_project_rejects_libraries_and_missing_artifacts(
+def test_run_project_rejects_libraries_and_adapter_errors(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -109,10 +108,11 @@ def test_run_project_rejects_libraries_and_missing_artifacts(
     monkeypatch.setattr(
         "evm.project.workflow.compile_project", lambda *args, **kwargs: _toolchain()
     )
-    monkeypatch.setattr(
-        "evm.project.workflow.artifact_candidates",
-        lambda *args: (tmp_path / "first", tmp_path / "second"),
-    )
+
+    def reject_run(*args: object) -> list[str]:
+        raise EvmError("build succeeded but executable was not found")
+
+    monkeypatch.setattr("evm.project.workflow.run_command", reject_run)
     with pytest.raises(EvmError, match="executable was not found"):
         run_project(project, BuildRequest(), ())
 
