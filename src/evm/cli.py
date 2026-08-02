@@ -115,6 +115,7 @@ class _RunCommandOptions:
     feature: str | None
     manifest_path: Path | None
     standalone: bool
+    package: str | None
 
 
 @dataclass(frozen=True)
@@ -292,6 +293,7 @@ def build_command(
     help="Use an explicit Eiffel.toml for file mode.",
 )
 @click.option("--standalone", is_flag=True, help="Ignore project context in file mode.")
+@click.option("--package", type=str, help="Select a workspace package.")
 @click.argument("arguments", nargs=-1, type=click.UNPROCESSED)
 @command_errors
 def run_command(**raw_options: Any) -> None:
@@ -317,7 +319,7 @@ def run_command(**raw_options: Any) -> None:
             raise click.exceptions.Exit(exit_code)
         return
     _validate_project_run_options(options)
-    project = _require_project(load_project_context())
+    project = _selected_project(load_project_context(), options.package)
     exit_code = run_project(
         project,
         BuildRequest(
@@ -1045,6 +1047,7 @@ def _run_command_options(values: Mapping[str, Any]) -> _RunCommandOptions:
         feature=values["feature"],
         manifest_path=values["manifest_path"],
         standalone=values["standalone"],
+        package=values["package"],
     )
 
 
@@ -1063,6 +1066,8 @@ def _validate_file_run_options(options: _RunCommandOptions) -> None:
         raise EvmError("--target is not supported in file mode")
     if options.regenerate_ecf:
         raise EvmError("--regenerate-ecf is not supported in file mode")
+    if options.package is not None:
+        raise EvmError("--package is not supported in file mode")
 
 
 def _validate_project_run_options(options: _RunCommandOptions) -> None:

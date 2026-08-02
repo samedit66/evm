@@ -215,6 +215,47 @@ def test_build_failure_and_project_run_preserve_exit_status(
     assert executed.exit_code == 9
 
 
+def test_run_selects_workspace_package_and_preserves_program_arguments(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = CliRunner()
+    app = tmp_path / "app"
+    library = tmp_path / "library"
+    assert runner.invoke(main, ["new", str(app)]).exit_code == 0
+    assert runner.invoke(main, ["new", str(library), "--lib"]).exit_code == 0
+    (tmp_path / "Eiffel.toml").write_text('[workspace]\nmembers = ["library", "app"]\n')
+    selected_projects = []
+    received_arguments = []
+
+    def record_run(project, request, arguments) -> int:
+        selected_projects.append(project)
+        received_arguments.append(arguments)
+        return 0
+
+    monkeypatch.setattr("evm.cli.run_project", record_run)
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(
+        main,
+        ["run", "--package", "app", "--toolchain", "ise", "--", "--verbose"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert selected_projects[0].name == "app"
+    assert received_arguments == [("--verbose",)]
+
+
+def test_run_rejects_package_in_file_mode(tmp_path: Path) -> None:
+    source = tmp_path / "hello.e"
+    source.write_text("class HELLO end\n")
+
+    result = CliRunner().invoke(main, ["run", "--package", "app", str(source)])
+
+    assert result.exit_code == 1
+    assert "--package is not supported in file mode" in result.output
+
+
 def test_json_command_error_is_machine_readable(monkeypatch: pytest.MonkeyPatch) -> None:
     def fail_discovery() -> None:
         raise EvmError("discovery failed")
