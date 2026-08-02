@@ -12,6 +12,7 @@ This directory is the user guide for the current EVM release.
 | [Compatibility contract](compatibility.md) | Stability guarantees for the CLI, project files, and generated state |
 | [Package management](dependencies.md) | Sources, locking, installation, updates, graph inspection, and offline mode |
 | [Toolchains](toolchains.md) | Discovery, managed installations, selection, matrices, capabilities, and output |
+| [Adding your own compiler adapter](adding-your-own-compiler-adapter.md) | Adapter registry, lifecycle, installation, capabilities, and tests |
 | [ECF interoperability](ecf.md) | Managed ECF, overlays, legacy mode, and project import |
 | [Migrating existing projects](migrating-existing-projects.md) | Adopt EVM without replacing an existing ECF |
 | [Testing and tasks](testing-and-tasks.md) | Test target selection, filters, and workflows |

@@ -114,6 +114,8 @@ compilers = ["ise >=25.12,<26", "gobo =26.06.30"]
 Entries are ordered by preference. Constraints compare sequences of numeric
 components and support `=`, `>=`, `>`, `<=`, and `<`. Operators `^`, `~`,
 wildcards, and prerelease identifiers are not supported by the initial format.
+The experimental revision-based `serpent` and `liberty` adapters may be listed
+without a constraint.
 
 `compatibility.compilers` is the only field in the section and is required when
 the section is present. Each adapter may appear once. Omitting the section lets
@@ -152,9 +154,10 @@ default = "gobo@26.06"
 matrix = ["gobo@26.06", "ise@25.12"]
 ```
 
-Project selectors must contain exact numeric versions. `default` must occur in
-`matrix`, and duplicates are rejected. Use `evm toolchain use` to resolve
-channels and update the manifest and lock file transactionally.
+ISE and Gobo selectors must contain exact numeric versions. Experimental
+Serpent and Liberty selectors must contain exact Git commits. `default` must
+occur in `matrix`, and duplicates are rejected. Use `evm toolchain use` to
+resolve channels and update the manifest and lock file transactionally.
 
 | Field | Required | Type / default | Meaning |
 |---|---:|---|---|

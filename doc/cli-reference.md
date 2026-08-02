@@ -242,7 +242,7 @@ an existing installation without copying it.
 ### `evm toolchain list`
 
 ```text
-evm toolchain list [OPTIONS] [ise|gobo]
+evm toolchain list [OPTIONS] [ise|gobo|serpent|liberty]
 
 Options:
   --available    Show official releases available for download.
@@ -251,7 +251,7 @@ Options:
 ```
 
 Without `--available`, list managed and linked installations. The optional
-provider limits either view to ISE or Gobo.
+provider limits either view to one registered adapter.
 
 ### `evm toolchain install`
 
@@ -288,8 +288,9 @@ Options:
   --help
 ```
 
-Resolve selectors such as `gobo@latest` to exact versions and transactionally
-write `[toolchain]` plus the corresponding artifacts in `Eiffel.lock`. The
+Resolve selectors such as `gobo@latest`, `serpent@latest`, or `liberty@latest`
+to exact versions or Git revisions and transactionally write `[toolchain]`
+plus the corresponding artifacts in `Eiffel.lock`. The
 first selector becomes `toolchain.default`; all selectors form the matrix.
 
 ### `evm toolchain env`

@@ -8,10 +8,16 @@ independently from an optional exact compilation matrix.
 |---|---|---|---|
 | `ise` | ISE Eiffel | `ec` | EiffelBase |
 | `gobo` | Gobo Eiffel | `gec` | FreeELKS |
+| `serpent` | Serpent Eiffel (experimental) | managed Python worker | Serpent stdlib |
+| `liberty` | Liberty Eiffel (experimental) | `se` | Liberty core |
 
 `ise`, `gobo`, and exact values such as `gobo@26.06` are toolchain selectors.
 Executable names, filesystem paths, and constraints such as `gobo >=26.06` are
 not selectors.
+
+Serpent and Liberty are explicit opt-in adapters. They support application
+`build` and `run` only and never participate in the built-in automatic
+fallback. Their exact selectors use Git commits rather than release versions.
 
 ## Discover the environment
 
@@ -61,6 +67,18 @@ Offline installation uses only the verified download cache:
 $ evm toolchain install gobo@26.06 --offline
 ```
 
+Install an experimental adapter from an immutable revision with:
+
+```console
+$ evm toolchain install serpent@c95ab517a5914ebc9e8d2ccf767a6d2e6caf49f2
+$ evm toolchain install liberty@21b081378ec12798080128e7f39878d5d2097cb7
+```
+
+Serpent needs Python 3.13 or newer, `make`, GCC, Flex, Bison, and a JDK. EVM
+installs it into an isolated virtual environment and compiles to JVM class
+files. Liberty needs Git, Bash, GCC, and G++; its bootstrap remains inside the
+managed checkout. Liberty cannot be newly installed offline.
+
 ## Link an existing installation
 
 Register an existing EiffelStudio or Gobo installation without copying it:
@@ -84,6 +102,8 @@ Use the canonical option for one command:
 ```console
 $ evm build --toolchain ise
 $ evm build --toolchain gobo@26.06
+$ evm build --toolchain serpent@c95ab517
+$ evm run --toolchain liberty@21b0813
 ```
 
 `--compiler` is a compatibility alias for `--toolchain`. `EVM_TOOLCHAIN`

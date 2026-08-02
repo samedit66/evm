@@ -644,6 +644,8 @@ target сообщает `concurrency support="none"`; SCOOP включается
 |---|---|---|
 | `ise` | ISE Eiffel | `ec` |
 | `gobo` | Gobo Eiffel | `gec` |
+| `serpent` | Serpent Eiffel, experimental | managed Python worker |
+| `liberty` | Liberty Eiffel, experimental | `se` |
 
 Корректные примеры:
 
@@ -657,6 +659,11 @@ evm build --toolchain gobo@26.06
 совместимым alias `--toolchain`: две независимые модели выбора НЕ
 ПОДДЕРЖИВАЮТСЯ. Дополнительные adapters МОГУТ регистрировать новые стабильные
 semantic IDs.
+
+Экспериментальные `serpent` и `liberty` выбираются только явно и НЕ ДОЛЖНЫ
+участвовать во встроенном автоматическом fallback. В первой экспериментальной
+версии они поддерживают application `install`, `build` и `run`, но не обязаны
+поддерживать library, `check`, `test`, lint, doc или файловый запуск.
 
 Переменная окружения `EVM_TOOLCHAIN` принимает тот же селектор и валидируется
 тем же registry:
@@ -707,9 +714,11 @@ default = "gobo@26.06"
 matrix = ["gobo@26.06", "ise@25.12"]
 ```
 
-В проектном манифесте разрешены только точные числовые версии. Каналы
-`latest`, `beta` и `nightly` разрешаются командой `evm toolchain use`, после
-чего в манифест и lock-файл записывается точная версия. `default` ДОЛЖЕН
+В проектном манифесте ISE и Gobo используют только точные числовые версии.
+Revision-based providers `serpent` и `liberty` используют точный Git commit.
+Каналы `latest`, `beta` и `nightly` разрешаются командой `evm toolchain use`,
+после чего в манифест и lock-файл записывается точная версия или revision.
+`default` ДОЛЖЕН
 входить в `matrix`; дубликаты запрещены. Ограничения `[compatibility]` остаются
 независимыми и каждый элемент матрицы ДОЛЖЕН им соответствовать.
 
