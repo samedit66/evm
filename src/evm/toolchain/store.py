@@ -74,6 +74,7 @@ def managed_installation_directory(
 def save_managed_installation(installation: ToolchainInstallation) -> None:
     if installation.kind is not InstallationKind.MANAGED:
         raise EvmError("only managed installations can be stored beside their files")
+    _validate_managed_installation_version(installation)
     metadata = _installation_document(installation)
     atomic_write(installation.root.parent / _INSTALLATION_FILE, metadata)
 
@@ -398,7 +399,7 @@ def _parse_installation(raw: object, path: Path) -> ToolchainInstallation:
         raise EvmError(f"toolchain metadata {path}: unknown kind {raw['kind']!r}") from error
     return ToolchainInstallation(
         raw["provider"],
-        raw["version"],
+        _compatible_installation_version(raw["provider"], raw["version"], raw["revision"]),
         raw["revision"],
         platform,
         Path(raw["root"]),
@@ -407,6 +408,32 @@ def _parse_installation(raw: object, path: Path) -> ToolchainInstallation:
         _optional_string(raw, "checksum", path),
         _optional_string(raw, "source", path),
     )
+
+
+def _compatible_installation_version(provider: str, version: str, revision: str) -> str:
+    if (
+        provider == "gobo"
+        and version in {"latest", "beta", "nightly"}
+        and _VERSION_RE.fullmatch(revision) is not None
+    ):
+        return ".".join(revision.split(".")[:2])
+    return version
+
+
+def _validate_managed_installation_version(installation: ToolchainInstallation) -> None:
+    if installation.provider not in {"gobo", "ise"}:
+        return
+    values = {"version": installation.version, "revision": installation.revision}
+    invalid = next(
+        ((name, value) for name, value in values.items() if _VERSION_RE.fullmatch(value) is None),
+        None,
+    )
+    if invalid is not None:
+        name, value = invalid
+        raise EvmError(
+            f"managed {installation.provider} {name} must be numeric after channel resolution; "
+            f"found {value!r}"
+        )
 
 
 def _optional_string(raw: dict[str, object], name: str, path: Path) -> str | None:

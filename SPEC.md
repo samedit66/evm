@@ -718,6 +718,12 @@ matrix = ["gobo@26.06", "ise@25.12"]
 Revision-based providers `serpent` и `liberty` используют точный Git commit.
 Каналы `latest`, `beta` и `nightly` разрешаются командой `evm toolchain use`,
 после чего в манифест и lock-файл записывается точная версия или revision.
+Канал артефакта хранится отдельно и НЕ ДОЛЖЕН попадать в поле установленной
+версии. Для числовых provider, включая ISE и Gobo, managed metadata ДОЛЖНЫ
+содержать числовые `version` и `revision`; например Gobo nightly revision
+`26.07.06` имеет version `26.07` и channel `nightly`. Ранее сохраненные Gobo
+metadata с `version = "nightly"` ДОЛЖНЫ читаться совместимо по числовой revision
+без изменения файла read-only командами.
 `default` ДОЛЖЕН
 входить в `matrix`; дубликаты запрещены. Ограничения `[compatibility]` остаются
 независимыми и каждый элемент матрицы ДОЛЖЕН им соответствовать.

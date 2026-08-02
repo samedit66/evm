@@ -199,6 +199,13 @@ writing the project files:
 $ evm toolchain use gobo@latest --install
 ```
 
+Release channels are not versions. A Gobo nightly asset such as revision
+`26.07.06` is recorded as version `26.07`, revision `26.07.06`, and channel
+`nightly`; manifests and installed metadata therefore remain compatible with
+numeric version constraints. EVM reads older Gobo metadata that stored
+`version = "nightly"` using its numeric revision, without rewriting the file
+during `list`, `discover`, or `verify`.
+
 Install the project matrix later with:
 
 ```console

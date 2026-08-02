@@ -53,6 +53,7 @@ _DOWNLOAD_CHUNK_SIZE = 1024 * 1024
 _HTTP_TIMEOUT_SECONDS = 60
 _VERSION_RE = re.compile(r"\d+(?:\.\d+)+")
 _MINIMUM_BISON_VERSION = (3, 7)
+_SERPENT_PARSER_RESOURCE = "build/eiffelp"
 
 
 @dataclass(frozen=True)
@@ -350,7 +351,7 @@ def _bootstrap_liberty(
         environment = os.environ.copy()
         environment.update({"HOME": str(home), "CC": "gcc", "CXX": "g++"})
         _run_install_command(
-            ["bash", str(root / "install.sh"), "-bootstrap", "-plain"],
+            ["bash", str(root / "install.sh"), "-plain", "-bootstrap"],
             working_directory=root,
             environment=environment,
             progress=progress,
@@ -410,12 +411,24 @@ def _gobo_release_artifact(
             continue
         reported_versions = _VERSION_RE.findall(filename)
         revision = reported_versions[-1] if reported_versions else version
+        resolved_version = _gobo_release_version(version, revision, channel)
         digest = raw.get("digest")
         checksum = digest if isinstance(digest, str) and digest.startswith("sha256:") else None
         return ToolchainArtifact(
-            "gobo", version, revision, platform, url, filename, checksum, channel
+            "gobo", resolved_version, revision, platform, url, filename, checksum, channel
         )
     return None
+
+
+def _gobo_release_version(version: str, revision: str, channel: str) -> str:
+    if _VERSION_RE.fullmatch(version) is not None:
+        return version
+    if channel == "nightly" and _VERSION_RE.fullmatch(revision) is not None:
+        return ".".join(revision.split(".")[:2])
+    raise EvmError(
+        f"Gobo {channel} artifact does not resolve to a numeric version: "
+        f"version={version!r}, revision={revision!r}"
+    )
 
 
 def _eiffel_artifacts(
@@ -590,6 +603,8 @@ def _install_serpent_distribution(
         progress=progress,
         progress_message="Building and installing Serpent",
     )
+    _report(progress, "bootstrap", "Installing the Serpent native parser")
+    _install_serpent_parser(source_roots[0], installed_root)
     installation = ToolchainInstallation(
         artifact.provider,
         artifact.version,
@@ -606,6 +621,29 @@ def _install_serpent_distribution(
     save_managed_installation(installation)
     _report(progress, "complete", "Serpent installation verified")
     return installation
+
+
+def _install_serpent_parser(source_root: Path, installed_root: Path) -> None:
+    built_parser = source_root / "serpent" / "resources" / _SERPENT_PARSER_RESOURCE
+    if not built_parser.is_file():
+        raise EvmError(f"Serpent build did not produce its native parser: {built_parser}")
+    resources = _installed_serpent_resources(installed_root)
+    installed_parser = resources / _SERPENT_PARSER_RESOURCE
+    installed_parser.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(built_parser, installed_parser)
+    _ensure_executable(installed_parser)
+
+
+def _installed_serpent_resources(installed_root: Path) -> Path:
+    candidates = [installed_root / "Lib" / "site-packages" / "serpent" / "resources"]
+    candidates.extend((installed_root / "lib").glob("python*/site-packages/serpent/resources"))
+    existing = [path for path in candidates if path.is_dir()]
+    if len(existing) != 1:
+        raise EvmError(
+            "Serpent installation must contain one package resource directory; "
+            f"found {len(existing)}"
+        )
+    return existing[0]
 
 
 def _serpent_build_environment(bison: str) -> dict[str, str]:
@@ -642,7 +680,7 @@ def _verify_new_installation(
                 "-c",
                 (
                     "import os; from serpent.resources import get_resource_path; "
-                    "parser = get_resource_path('build/eiffelp'); "
+                    f"parser = get_resource_path('{_SERPENT_PARSER_RESOURCE}'); "
                     "assert parser.is_file() and os.access(parser, os.X_OK)"
                 ),
             ]

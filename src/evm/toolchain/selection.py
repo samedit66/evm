@@ -330,12 +330,7 @@ def _managed_detection(
     )
     if installation is None:
         return None
-    return Detection(
-        installation.executable,
-        NumericVersion.parse(installation.version),
-        None,
-        installation.revision,
-    )
+    return _installation_detection(installation)
 
 
 def _installation_for_executable(executable: Path) -> ToolchainInstallation | None:
@@ -363,9 +358,23 @@ def _detection_for_selector(selector: ToolchainSelector) -> Detection | None:
     )
     if installation is None:
         return None
+    return _installation_detection(installation)
+
+
+def _installation_detection(installation: ToolchainInstallation) -> Detection:
+    try:
+        version = NumericVersion.parse(installation.version)
+    except EvmError:
+        return Detection(
+            installation.executable,
+            None,
+            f"installed {installation.provider} metadata has invalid version "
+            f"{installation.version!r}; reinstall {installation.provider}@{installation.revision}",
+            installation.revision,
+        )
     return Detection(
         installation.executable,
-        NumericVersion.parse(installation.version),
+        version,
         None,
         installation.revision,
     )

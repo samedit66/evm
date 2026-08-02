@@ -16,9 +16,15 @@ from evm.toolchain.selection import (
     artifact_candidates,
     compiler_command,
     detect,
+    detect_all,
     prepare_build_directory,
     run_compiler,
     select_toolchain,
+)
+from evm.toolchain.types import (
+    InstallationKind,
+    ToolchainInstallation,
+    current_toolchain_platform,
 )
 from evm.versioning import NumericVersion, satisfies
 
@@ -271,6 +277,7 @@ def test_selection_enforces_capabilities_and_compatibility(
         "gobo": Detection(Path("/tools/gec"), NumericVersion.parse("26.06"), None),
     }
     monkeypatch.setattr("evm.toolchain.selection.detect_all", lambda: detections)
+    monkeypatch.setattr("evm.toolchain.selection._detection_for_selector", lambda selector: None)
     scoop = replace(base, requires=(("concurrency", "scoop"),))
     with pytest.raises(EvmError, match="unsupported"):
         select_toolchain(scoop, "gobo")
@@ -282,6 +289,46 @@ def test_selection_enforces_capabilities_and_compatibility(
     semantics = replace(base, requires=(("ise-semantics", "26.01"),))
     with pytest.raises(EvmError, match="older than required"):
         select_toolchain(semantics, "ise")
+
+
+def test_invalid_gobo_metadata_does_not_break_explicit_liberty_selection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gobo = _installed_toolchain(tmp_path, "gobo", "nightly", "26.07.06", "bin/gec")
+    liberty = _installed_toolchain(tmp_path, "liberty", "0.0", "21b0813", "target/bin/se")
+    installations = (gobo, liberty)
+    monkeypatch.setattr("evm.toolchain.selection.list_installations", lambda: installations)
+    monkeypatch.setattr(
+        "evm.toolchain.selection.detect",
+        lambda adapter: Detection(None, None, f"{adapter} is missing"),
+    )
+
+    detections = detect_all()
+    selected = select_toolchain(
+        create_project(ProjectCreationRequest(tmp_path / "hello")), "liberty"
+    )
+
+    assert detections["gobo"].error is not None
+    assert "invalid version" in detections["gobo"].error
+    assert selected.adapter == "liberty"
+    assert selected.version == NumericVersion.parse("0.0")
+
+
+def test_selecting_invalid_managed_version_reports_provider_diagnostic(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gobo = _installed_toolchain(tmp_path, "gobo", "nightly", "26.07.06", "bin/gec")
+    monkeypatch.setattr("evm.toolchain.selection.list_installations", lambda: (gobo,))
+    monkeypatch.setattr(
+        "evm.toolchain.selection.detect",
+        lambda adapter: Detection(None, None, f"{adapter} is missing"),
+    )
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
+
+    with pytest.raises(EvmError, match="installed gobo metadata has invalid version"):
+        select_toolchain(project, "gobo")
 
 
 def test_run_compiler_sets_runtime_environment_and_reports_output(
@@ -323,3 +370,25 @@ def test_compiler_commands_cover_check_library_and_capability_modes(tmp_path: Pa
     assert "--ise=25.12" in gobo_command
     assert "--capability=void_safety=all" in gobo_command
     assert "--cc=zig" in gobo_command
+
+
+def _installed_toolchain(
+    directory: Path,
+    provider: str,
+    version: str,
+    revision: str,
+    executable_path: str,
+) -> ToolchainInstallation:
+    root = directory / provider
+    executable = root / executable_path
+    executable.parent.mkdir(parents=True)
+    executable.write_text("compiler")
+    return ToolchainInstallation(
+        provider,
+        version,
+        revision,
+        current_toolchain_platform(),
+        root,
+        executable,
+        InstallationKind.MANAGED,
+    )

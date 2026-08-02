@@ -172,6 +172,39 @@ def test_managed_installation_round_trip(tmp_path: Path, monkeypatch: pytest.Mon
     assert list_installations() == ()
 
 
+def test_store_reads_legacy_gobo_channel_as_numeric_version(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = tmp_path / "store"
+    monkeypatch.setenv("EVM_TOOLCHAIN_HOME", str(store))
+    installation = _managed_installation(store, "gobo", "26.07", "26.07.06")
+    save_managed_installation(installation)
+    metadata = installation.root.parent / "installation.toml"
+    metadata.write_text(metadata.read_text().replace('version = "26.07"', 'version = "nightly"'))
+
+    loaded = list_installations()
+
+    assert loaded == (installation,)
+    assert 'version = "nightly"' in metadata.read_text()
+
+
+@pytest.mark.parametrize(
+    ("version", "revision", "field"),
+    [("nightly", "26.07.06", "version"), ("26.07", "nightly", "revision")],
+)
+def test_store_rejects_unresolved_managed_release_channel(
+    tmp_path: Path,
+    version: str,
+    revision: str,
+    field: str,
+) -> None:
+    installation = _managed_installation(tmp_path / "store", "gobo", version, revision)
+
+    with pytest.raises(EvmError, match=rf"{field} must be numeric"):
+        save_managed_installation(installation)
+
+
 def test_store_rejects_wrong_registration_kinds(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -586,6 +619,17 @@ def test_gobo_catalog_filters_platform_asset() -> None:
     platform = current_toolchain_platform("Linux", "x86_64")
     releases = [
         {
+            "tag_name": "nightly",
+            "draft": False,
+            "prerelease": True,
+            "assets": [
+                {
+                    "name": "gobo-linux-x86_64-26.07.06+56bafe9.tar.xz",
+                    "browser_download_url": "https://example.test/gobo-nightly.tar.xz",
+                }
+            ],
+        },
+        {
             "tag_name": "gobo-26.06",
             "draft": False,
             "prerelease": False,
@@ -607,9 +651,15 @@ def test_gobo_catalog_filters_platform_asset() -> None:
 
     artifacts = available_artifacts("gobo", client, platform)
 
-    assert len(artifacts) == 1
-    assert artifacts[0].revision == "26.06.30"
-    assert artifacts[0].checksum == "sha256:abc"
+    assert len(artifacts) == 2
+    nightly, stable = artifacts
+    assert (nightly.version, nightly.revision, nightly.channel) == (
+        "26.07",
+        "26.07.06",
+        "nightly",
+    )
+    assert stable.revision == "26.06.30"
+    assert stable.checksum == "sha256:abc"
 
 
 def test_eiffel_catalog_resolves_channels_and_exact_revision() -> None:
@@ -812,6 +862,19 @@ def test_serpent_install_creates_isolated_python_environment(
             python.write_text("python")
         if command[1:4] == ["-m", "pip", "install"]:
             build_environments.append(options["environment"])
+            source_root = Path(command[4])
+            built_parser = source_root / "serpent" / "resources" / "build" / "eiffelp"
+            built_parser.parent.mkdir(parents=True)
+            built_parser.write_text("parser")
+            resources = (
+                Path(command[0]).parents[1]
+                / "lib"
+                / "python3.13"
+                / "site-packages"
+                / "serpent"
+                / "resources"
+            )
+            resources.mkdir(parents=True)
 
     monkeypatch.setattr("evm.toolchain.installation._run_install_command", run_install)
 
@@ -822,6 +885,9 @@ def test_serpent_install_creates_isolated_python_environment(
     assert installation.revision == revision
     assert installation.executable.name == "python"
     assert build_environments[0]["PATH"].startswith("/tools")
+    parser = installation.root / "lib/python3.13/site-packages/serpent/resources/build/eiffelp"
+    assert parser.read_text() == "parser"
+    assert os.access(parser, os.X_OK)
     assert list_installations() == (installation,)
 
 
@@ -890,6 +956,7 @@ def test_liberty_install_bootstraps_exact_git_revision(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     revision = "21b081378ec12798080128e7f39878d5d2097cb7"
+    commands: list[list[str]] = []
     monkeypatch.setenv("EVM_TOOLCHAIN_HOME", str(tmp_path / "store"))
     monkeypatch.setattr(
         "evm.toolchain.installation.shutil.which",
@@ -897,6 +964,7 @@ def test_liberty_install_bootstraps_exact_git_revision(
     )
 
     def run_install(command: list[str], **options: object) -> None:
+        commands.append(command)
         if command[0] == "bash":
             root = Path(options["working_directory"])
             executable = root / "target" / "bin" / "se"
@@ -911,6 +979,8 @@ def test_liberty_install_bootstraps_exact_git_revision(
     assert installation.revision == revision
     assert installation.executable == installation.root / "target" / "bin" / "se"
     assert (installation.root / ".home").is_dir()
+    bootstrap = next(command for command in commands if command[0] == "bash")
+    assert bootstrap[-2:] == ["-plain", "-bootstrap"]
 
 
 def test_liberty_rejects_whitespace_store_before_checkout(
@@ -975,6 +1045,21 @@ def test_catalog_reports_invalid_and_failed_responses() -> None:
     platform = current_toolchain_platform("Linux", "x86_64")
     with pytest.raises(EvmError, match="invalid response"):
         available_artifacts("gobo", _json_client({"invalid": True}), platform)
+    unresolved_nightly = [
+        {
+            "tag_name": "nightly",
+            "draft": False,
+            "prerelease": True,
+            "assets": [
+                {
+                    "name": "gobo-linux-x86_64-nightly.tar.xz",
+                    "browser_download_url": "https://example.test/gobo-nightly.tar.xz",
+                }
+            ],
+        }
+    ]
+    with pytest.raises(EvmError, match="does not resolve to a numeric version"):
+        available_artifacts("gobo", _json_client(unresolved_nightly), platform)
     client = httpx.Client(
         transport=httpx.MockTransport(lambda request: httpx.Response(503, text="down"))
     )
@@ -1362,7 +1447,7 @@ def test_configure_project_toolchains_writes_exact_policy_and_lock(
 
     proposed, lock = configure_project_toolchains(
         project,
-        (ToolchainSelector.parse("gobo@latest"), ToolchainSelector.parse("ise@25.12")),
+        (ToolchainSelector.parse("gobo@nightly"), ToolchainSelector.parse("ise@25.12")),
     )
 
     assert proposed.toolchain is not None
@@ -1471,11 +1556,12 @@ def test_toolchain_cli_lists_available_releases_in_text_and_json(
     platform = current_toolchain_platform()
     artifact = ToolchainArtifact(
         "gobo",
-        "26.06",
-        "26.06.30",
+        "26.07",
+        "26.07.06",
         platform,
         "https://example.test/gobo.tar.gz",
         "gobo.tar.gz",
+        channel="nightly",
     )
     calls: list[str] = []
 
@@ -1489,8 +1575,8 @@ def test_toolchain_cli_lists_available_releases_in_text_and_json(
     text_result = runner.invoke(main, ["toolchain", "list", "--available"])
     json_result = runner.invoke(main, ["toolchain", "list", "gobo", "--available", "--json"])
 
-    assert "gobo@26.06" in text_result.output
-    assert json.loads(json_result.output)["toolchains"][0]["revision"] == "26.06.30"
+    assert "gobo@26.07\tnightly" in text_result.output
+    assert json.loads(json_result.output)["toolchains"][0]["revision"] == "26.07.06"
     assert calls == ["ise", "gobo", "serpent", "liberty", "gobo"]
 
 
