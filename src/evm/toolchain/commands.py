@@ -39,7 +39,10 @@ def configure_project_toolchains(
     if not selectors:
         raise EvmError("at least one toolchain selector is required")
     artifacts = tuple(resolve_artifact(selector, client) for selector in selectors)
-    exact_selectors = tuple(f"{item.provider}@{item.version}" for item in artifacts)
+    exact_selectors = tuple(
+        f"{item.provider}@{item.revision if item.provider == 'serpent' else item.version}"
+        for item in artifacts
+    )
     if len(exact_selectors) != len(set(exact_selectors)):
         raise EvmError("toolchain matrix resolves to duplicate releases")
     document = _load_manifest_document(project.manifest_path)

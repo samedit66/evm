@@ -9,18 +9,23 @@ import pytest
 from evm.errors import EvmError
 from evm.model import BuildRequest
 from evm.project.creation import ProjectCreationRequest, create_project
-from evm.toolchain.compilers import compiler_adapter, compiler_adapter_names
+from evm.toolchain.compilers import (
+    automatic_compiler_adapter_names,
+    compiler_adapter,
+    compiler_adapter_names,
+)
 from evm.toolchain.selection import Toolchain
 from evm.versioning import NumericVersion
 
 
 def test_registry_preserves_automatic_selection_priority() -> None:
-    assert compiler_adapter_names() == ("ise", "gobo")
+    assert compiler_adapter_names() == ("ise", "gobo", "serpent")
+    assert automatic_compiler_adapter_names() == ("ise", "gobo")
 
 
 def test_registry_rejects_unknown_adapter() -> None:
-    with pytest.raises(EvmError, match="known adapters: ise, gobo"):
-        compiler_adapter("serpent")
+    with pytest.raises(EvmError, match="known adapters: ise, gobo, serpent"):
+        compiler_adapter("unknown")
 
 
 def test_each_adapter_creates_a_command_for_its_executable(tmp_path: Path) -> None:
@@ -47,3 +52,30 @@ def test_gobo_adapter_reports_unsupported_scoop(tmp_path: Path) -> None:
     error = compiler_adapter("gobo").compatibility_error(project)
 
     assert error == "required capability concurrency=scoop is unsupported"
+
+
+def test_serpent_adapter_builds_worker_request(tmp_path: Path) -> None:
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
+    toolchain = Toolchain(
+        "serpent",
+        Path("/tools/python3.13"),
+        NumericVersion.parse("0.1.0"),
+        "explicit",
+        "test",
+        "c95ab517",
+    )
+
+    command = compiler_adapter("serpent").compiler_command(toolchain, project, BuildRequest())
+
+    assert command[0] == "/tools/python3.13"
+    assert '"operation": "build"' in command[2]
+    assert '"main_class": "APPLICATION"' in command[2]
+    assert "build/serpent/c95ab517/default/dev" in command[2]
+
+
+def test_serpent_adapter_rejects_unsupported_capabilities(tmp_path: Path) -> None:
+    project = create_project(ProjectCreationRequest(tmp_path / "hello", scoop=True))
+
+    error = compiler_adapter("serpent").compatibility_error(project)
+
+    assert error == "Serpent does not support the requested concurrency capability"

@@ -6,6 +6,7 @@ import hashlib
 import os
 import re
 import shutil
+import subprocess
 import tarfile
 import tempfile
 import zipfile
@@ -35,6 +36,9 @@ from evm.toolchain.types import (
 )
 
 _GOBO_RELEASES_URL = "https://api.github.com/repos/gobo-eiffel/gobo/releases"
+_SERPENT_COMMIT_URL = "https://api.github.com/repos/samedit66/serpent/commits/main"
+_SERPENT_ARCHIVE_URL = "https://github.com/samedit66/serpent/archive/{revision}.zip"
+_SERPENT_VERSION = "0.1.0"
 _EIFFEL_INSTALL_SCRIPT_URL = "https://www.eiffel.org/setup/install.sh"
 _EIFFEL_CDN_URL = "https://www.eiffel.com/cdn/EiffelStudio"
 _EIFFEL_ARCHIVE_URL = "https://ftp.eiffel.com/pub/download"
@@ -54,7 +58,9 @@ def available_artifacts(
             return _gobo_artifacts(catalog, current_platform)
         if provider == "ise":
             return _eiffel_artifacts(catalog, current_platform)
-    raise EvmError(f"unknown toolchain provider {provider!r}; known providers: ise, gobo")
+        if provider == "serpent":
+            return (_serpent_artifact(catalog, current_platform),)
+    raise EvmError(f"unknown toolchain provider {provider!r}; known providers: ise, gobo, serpent")
 
 
 def resolve_artifact(
@@ -62,6 +68,8 @@ def resolve_artifact(
     client: httpx.Client | None = None,
     platform: ToolchainPlatform | None = None,
 ) -> ToolchainArtifact:
+    if selector.provider == "serpent" and selector.requested_version != "latest":
+        return _serpent_revision_artifact(selector.requested_version, platform)
     artifacts = available_artifacts(selector.provider, client, platform)
     requested = selector.requested_version
     candidates = [artifact for artifact in artifacts if _artifact_matches(artifact, requested)]
@@ -166,6 +174,34 @@ def _gobo_artifacts(
         if artifact is not None:
             artifacts.append(artifact)
     return tuple(artifacts)
+
+
+def _serpent_artifact(
+    client: httpx.Client,
+    platform: ToolchainPlatform,
+) -> ToolchainArtifact:
+    payload = _get(client, _SERPENT_COMMIT_URL).json()
+    revision = payload.get("sha") if isinstance(payload, Mapping) else None
+    if not isinstance(revision, str):
+        raise EvmError("Serpent commit catalog did not report a revision")
+    return _serpent_revision_artifact(revision, platform)
+
+
+def _serpent_revision_artifact(
+    revision: str,
+    platform: ToolchainPlatform | None,
+) -> ToolchainArtifact:
+    if re.fullmatch(r"[0-9a-f]{7,40}", revision) is None:
+        raise EvmError("Serpent selectors must use latest or a 7-40 character Git commit")
+    current_platform = platform or current_toolchain_platform()
+    return ToolchainArtifact(
+        "serpent",
+        _SERPENT_VERSION,
+        revision,
+        current_platform,
+        _SERPENT_ARCHIVE_URL.format(revision=revision),
+        f"serpent-{revision}.zip",
+    )
 
 
 def _gobo_release_artifact(
@@ -285,6 +321,8 @@ def _extract_installation(
         extracted = staging / "extracted"
         extracted.mkdir()
         _extract_archive(archive, extracted)
+        if artifact.provider == "serpent":
+            return _install_serpent_distribution(artifact, extracted, checksum, destination)
         distribution_root = _distribution_root(artifact.provider, extracted, artifact.platform)
         destination.mkdir()
         installed_root = destination / "root"
@@ -303,11 +341,81 @@ def _extract_installation(
         )
         save_managed_installation(installation)
         return installation
+    except EvmError:
+        shutil.rmtree(destination, ignore_errors=True)
+        raise
     except (OSError, tarfile.TarError, zipfile.BadZipFile, py7zr.Bad7zFile) as error:
         shutil.rmtree(destination, ignore_errors=True)
         raise EvmError(f"cannot install {artifact.identity}: {error}") from error
     finally:
         shutil.rmtree(staging, ignore_errors=True)
+
+
+def _install_serpent_distribution(
+    artifact: ToolchainArtifact,
+    extracted: Path,
+    checksum: str,
+    destination: Path,
+) -> ToolchainInstallation:
+    source_roots = [path.parent for path in extracted.glob("*/pyproject.toml")]
+    if len(source_roots) != 1:
+        raise EvmError(
+            f"Serpent archive must contain one Python project; found {len(source_roots)}"
+        )
+    python = _find_serpent_python()
+    if python is None:
+        raise EvmError("Serpent requires Python 3.13 or newer; no compatible Python was found")
+    missing_tools = [
+        name for name in ("make", "gcc", "flex", "bison") if shutil.which(name) is None
+    ]
+    if missing_tools:
+        raise EvmError(f"Serpent build tools were not found: {', '.join(missing_tools)}")
+    destination.mkdir()
+    installed_root = destination / "root"
+    _run_install_command([python, "-m", "venv", str(installed_root)])
+    executable = _venv_python(installed_root)
+    _run_install_command([str(executable), "-m", "pip", "install", str(source_roots[0])])
+    installation = ToolchainInstallation(
+        artifact.provider,
+        artifact.version,
+        artifact.revision,
+        artifact.platform,
+        installed_root,
+        executable,
+        InstallationKind.MANAGED,
+        f"sha256:{checksum}",
+        artifact.url,
+    )
+    save_managed_installation(installation)
+    return installation
+
+
+def _run_install_command(command: list[str]) -> None:
+    try:
+        completed = subprocess.run(command, check=False, capture_output=True, text=True)
+    except OSError as error:
+        raise EvmError(f"cannot run {' '.join(command)}: {error}") from error
+    if completed.returncode != 0:
+        details = completed.stderr.strip() or completed.stdout.strip()
+        raise EvmError(f"toolchain installation command failed: {' '.join(command)}\n{details}")
+
+
+def _find_serpent_python() -> str | None:
+    for name in ("python3.15", "python3.14", "python3.13", "python3"):
+        executable = shutil.which(name)
+        if executable is None:
+            continue
+        completed = subprocess.run(
+            [executable, "--version"], check=False, capture_output=True, text=True
+        )
+        match = re.search(r"Python (\d+)\.(\d+)", completed.stdout + completed.stderr)
+        if match is not None and (int(match.group(1)), int(match.group(2))) >= (3, 13):
+            return executable
+    return None
+
+
+def _venv_python(root: Path) -> Path:
+    return root / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
 
 
 def _extract_archive(archive: Path, destination: Path) -> None:
@@ -390,6 +498,8 @@ def _cached_artifacts(
     if not cache.is_dir():
         return ()
     artifacts: list[ToolchainArtifact] = []
+    if selector.provider == "serpent":
+        return _cached_serpent_artifacts(selector, platform, cache)
     provider_prefix = "Eiffel_" if selector.provider == "ise" else "gobo-"
     for archive in sorted(cache.iterdir(), reverse=True):
         if not archive.is_file() or not archive.name.startswith(provider_prefix):
@@ -410,6 +520,20 @@ def _cached_artifacts(
             archive.name,
         )
         if _artifact_matches(artifact, selector.requested_version):
+            artifacts.append(artifact)
+    return tuple(artifacts)
+
+
+def _cached_serpent_artifacts(
+    selector: ToolchainSelector,
+    platform: ToolchainPlatform,
+    cache: Path,
+) -> tuple[ToolchainArtifact, ...]:
+    artifacts = []
+    for archive in sorted(cache.glob("serpent-*.zip"), reverse=True):
+        revision = archive.stem.removeprefix("serpent-")
+        artifact = _serpent_revision_artifact(revision, platform)
+        if selector.requested_version in {"latest", revision}:
             artifacts.append(artifact)
     return tuple(artifacts)
 

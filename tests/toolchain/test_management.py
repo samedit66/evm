@@ -58,12 +58,14 @@ from evm.toolchain.types import (
 def test_selector_accepts_provider_and_exact_version() -> None:
     provider = ToolchainSelector.parse("GOBO")
     exact = ToolchainSelector.parse("ise@25.12.98922")
+    serpent = ToolchainSelector.parse("serpent@c95ab517")
 
     assert provider.provider == "gobo"
     assert provider.requested_version == "latest"
     assert str(provider) == "gobo"
     assert exact.version == "25.12.98922"
     assert str(exact) == "ise@25.12.98922"
+    assert serpent.version == "c95ab517"
 
 
 @pytest.mark.parametrize("value", ["", "gec", "gobo@", "gobo >=26", "ise/path"])
@@ -525,6 +527,55 @@ def test_eiffel_catalog_resolves_channels_and_exact_revision() -> None:
     assert exact.url.endswith("/25.12/98922/Eiffel_25.12_rev_98922-linux-x86-64.tar.bz2")
 
 
+def test_serpent_catalog_resolves_latest_and_exact_commit() -> None:
+    revision = "c95ab517a5914ebc9e8d2ccf767a6d2e6caf49f2"
+    platform = current_toolchain_platform("Linux", "x86_64")
+
+    latest = available_artifacts("serpent", _json_client({"sha": revision}), platform)
+    exact = resolve_artifact(ToolchainSelector.parse(f"serpent@{revision}"), platform=platform)
+
+    assert latest[0].version == "0.1.0"
+    assert latest[0].revision == revision
+    assert exact.url.endswith(f"/{revision}.zip")
+
+
+def test_serpent_install_creates_isolated_python_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    revision = "c95ab517a5914ebc9e8d2ccf767a6d2e6caf49f2"
+    archive = _serpent_zip(revision)
+    client = httpx.Client(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, content=archive))
+    )
+    monkeypatch.setenv("EVM_TOOLCHAIN_HOME", str(tmp_path / "store"))
+    monkeypatch.setenv("EVM_TOOLCHAIN_CACHE", str(tmp_path / "cache"))
+    monkeypatch.setattr(
+        "evm.toolchain.installation.shutil.which",
+        lambda name: f"/tools/{name}",
+    )
+    monkeypatch.setattr(
+        "evm.toolchain.installation._find_serpent_python", lambda: "/tools/python3.13"
+    )
+
+    def run(command: list[str], **options: object) -> SimpleNamespace:
+        if command[1:3] == ["-m", "venv"]:
+            python = Path(command[3]) / "bin" / "python"
+            python.parent.mkdir(parents=True)
+            python.write_text("python")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("evm.toolchain.installation.subprocess.run", run)
+
+    installation = install_toolchain(ToolchainSelector.parse(f"serpent@{revision}"), client=client)
+
+    assert installation.provider == "serpent"
+    assert installation.version == "0.1.0"
+    assert installation.revision == revision
+    assert installation.executable.name == "python"
+    assert list_installations() == (installation,)
+
+
 def test_catalog_reports_unknown_provider_and_missing_release() -> None:
     platform = current_toolchain_platform("Linux", "x86_64")
     with pytest.raises(EvmError, match="unknown toolchain provider"):
@@ -966,7 +1017,7 @@ def test_toolchain_cli_lists_available_releases_in_text_and_json(
 
     assert "gobo@26.06" in text_result.output
     assert json.loads(json_result.output)["toolchains"][0]["revision"] == "26.06.30"
-    assert calls == ["ise", "gobo", "gobo"]
+    assert calls == ["ise", "gobo", "serpent", "gobo"]
 
 
 def test_toolchain_cli_lists_empty_and_text_installations(
@@ -1276,6 +1327,13 @@ def _single_file_tar(name: str, content: bytes) -> bytes:
         member = tarfile.TarInfo(name)
         member.size = len(content)
         archive.addfile(member, io.BytesIO(content))
+    return stream.getvalue()
+
+
+def _serpent_zip(revision: str) -> bytes:
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, mode="w") as archive:
+        archive.writestr(f"serpent-{revision}/pyproject.toml", "[project]\nname='serpent'\n")
     return stream.getvalue()
 
 

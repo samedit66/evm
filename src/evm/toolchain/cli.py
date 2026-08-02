@@ -64,7 +64,7 @@ def toolchain_list_command(
 
 
 def _list_available_toolchains(provider: str | None, output_json: bool) -> None:
-    providers = (provider,) if provider else ("ise", "gobo")
+    providers = (provider,) if provider else compiler_adapter_names()
     artifacts = tuple(
         artifact
         for selected_provider in providers

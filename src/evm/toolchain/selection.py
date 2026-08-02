@@ -45,6 +45,7 @@ class Toolchain:
     version: NumericVersion
     selection: str
     reason: str
+    revision: str | None = None
 
     @property
     def display_name(self) -> str:
@@ -59,6 +60,7 @@ class Detection:
     executable: Path | None
     version: NumericVersion | None
     error: str | None
+    revision: str | None = None
 
 
 @dataclass(frozen=True)
@@ -140,6 +142,7 @@ def select_toolchain(project: Project, explicit: str | None = None) -> Toolchain
             detected.version,
             policy.mode,
             policy.reason,
+            detected.revision,
         )
     details = "\n".join(f"  - {item}" for item in rejected)
     raise EvmError(f"no compatible Eiffel toolchain found:\n{details}\nrun `evm discover`")
@@ -229,7 +232,11 @@ def run_compiler(
 ) -> None:
     environment = os.environ.copy()
     environment.update(dict(toolchain_environment_values(command)))
-    adapter = "gobo" if Path(command[0]).stem.casefold() == "gec" else "ise"
+    installation = _installation_for_executable(Path(command[0]))
+    if installation is not None:
+        adapter = installation.provider
+    else:
+        adapter = "gobo" if Path(command[0]).stem.casefold() == "gec" else "ise"
     environment["evm_compiler"] = adapter
     environment["evm_architecture"] = platform.machine().lower()
     environment["ZIG_GLOBAL_CACHE_DIR"] = str(working_directory / ".zig-global-cache")
@@ -276,6 +283,15 @@ def artifact_candidates(
     return compiler_adapter(toolchain.adapter).artifact_candidates(toolchain, project, request)
 
 
+def run_command(
+    toolchain: Toolchain,
+    project: Project,
+    request: BuildRequest,
+    arguments: tuple[str, ...],
+) -> list[str]:
+    return compiler_adapter(toolchain.adapter).run_command(toolchain, project, request, arguments)
+
+
 def _validate_adapter(adapter: str) -> None:
     if adapter not in KNOWN_ADAPTERS:
         known = ", ".join(KNOWN_ADAPTERS)
@@ -315,8 +331,9 @@ def _managed_detection(
         return None
     return Detection(
         installation.executable,
-        NumericVersion.parse(installation.revision),
+        NumericVersion.parse(installation.version),
         None,
+        installation.revision,
     )
 
 
@@ -347,8 +364,9 @@ def _detection_for_selector(selector: ToolchainSelector) -> Detection | None:
         return None
     return Detection(
         installation.executable,
-        NumericVersion.parse(installation.revision),
+        NumericVersion.parse(installation.version),
         None,
+        installation.revision,
     )
 
 

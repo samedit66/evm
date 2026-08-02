@@ -172,7 +172,7 @@ def toolchain_environment(
             raise AssertionError("Gobo environment has no effective root")
         environment["GOBO"] = str(effective_root)
         environment["ISE_PLATFORM"] = installation.platform.ise_platform
-    else:
+    elif installation.provider == "ise":
         environment["ISE_EIFFEL"] = str(installation.root)
         environment["ISE_LIBRARY"] = str(installation.root)
         environment["ISE_PLATFORM"] = installation.platform.ise_platform
@@ -233,6 +233,8 @@ def verify_installation(installation: ToolchainInstallation) -> tuple[str, ...]:
             gobo_shell_root(installation)
         except EvmError as error:
             diagnostics.append(str(error))
+    if installation.provider == "serpent":
+        return tuple(diagnostics)
     try:
         detected_version = _probe_version(installation.provider, installation.executable)
     except EvmError as error:
@@ -398,6 +400,8 @@ def _toolchain_path_entries(
 ) -> list[str]:
     if installation.provider == "gobo":
         return [str((effective_root or installation.root) / "bin")]
+    if installation.provider == "serpent":
+        return [str(installation.executable.parent)]
     root = installation.root
     platform = installation.platform.ise_platform
     return [

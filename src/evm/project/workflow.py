@@ -35,9 +35,9 @@ from evm.model import BuildRequest, PackageMetadata, Project, Root, Target, Test
 from evm.toolchain.compilers import compiler_adapter
 from evm.toolchain.selection import (
     Toolchain,
-    artifact_candidates,
     compiler_command,
     prepare_build_directory,
+    run_command,
     run_compiler,
     select_toolchain,
 )
@@ -205,13 +205,8 @@ def run_project(
         project,
         request,
     )
-    for candidate in artifact_candidates(toolchain, project, request):
-        if candidate.is_file():
-            return subprocess.run([str(candidate), *arguments], cwd=project.directory).returncode
-    candidates = "\n".join(
-        f"  - {item}" for item in artifact_candidates(toolchain, project, request)
-    )
-    raise EvmError(f"build succeeded but executable was not found; checked:\n{candidates}")
+    command = run_command(toolchain, project, request, arguments)
+    return subprocess.run(command, cwd=project.directory).returncode
 
 
 def effective_sources(project: Project, target_name: str) -> tuple[str, ...]:
