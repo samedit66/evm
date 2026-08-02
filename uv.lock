@@ -399,7 +399,7 @@ wheels = [
 
 [[package]]
 name = "evm"
-version = "1.0.0b3"
+version = "1.0.0b4"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
