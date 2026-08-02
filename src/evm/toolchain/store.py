@@ -32,6 +32,10 @@ _LINKED_FILE = "linked.toml"
 _VERSION_RE = re.compile(r"\d+(?:\.\d+)+")
 _PROBE_TIMEOUT_SECONDS = 15
 _GOBO_ALIAS_DIRECTORY = ".evm/toolchain-aliases"
+_MACPORTS_INSTALL_URL = "https://www.macports.org/install.php"
+_ISE_MACOS_DEPENDENCY_COMMAND = (
+    "sudo port install pkgconfig bzip2 xorg-libXtst gtk3 adwaita-icon-theme"
+)
 
 
 def user_toolchain_root(environment: Mapping[str, str] | None = None) -> Path:
@@ -138,7 +142,16 @@ def probe_linked_installation(path: Path) -> ToolchainInstallation:
         raise EvmError(f"toolchain path is not a directory: {root}")
     platform = current_toolchain_platform()
     provider, executable = _find_toolchain_executable(root, platform)
-    revision = _probe_version(provider, executable)
+    candidate = ToolchainInstallation(
+        provider,
+        "unknown",
+        "unknown",
+        platform,
+        root,
+        executable,
+        InstallationKind.LINKED,
+    )
+    revision = _probe_version(candidate)
     version = ".".join(revision.split(".")[:2])
     return ToolchainInstallation(
         provider=provider,
@@ -255,7 +268,7 @@ def verify_installation(installation: ToolchainInstallation) -> tuple[str, ...]:
         diagnostics.extend(_verify_liberty(installation))
         return tuple(diagnostics)
     try:
-        detected_version = _probe_version(installation.provider, installation.executable)
+        detected_version = _probe_version(installation)
     except EvmError as error:
         diagnostics.append(str(error))
     else:
@@ -474,23 +487,41 @@ def _find_toolchain_executable(
     raise EvmError(f"multiple Eiffel compilers found under {root}; link a more specific directory")
 
 
-def _probe_version(provider: str, executable: Path) -> str:
-    option = "-version" if provider == "ise" else "--version"
+def _probe_version(installation: ToolchainInstallation) -> str:
+    executable = installation.executable
+    option = "-version" if installation.provider == "ise" else "--version"
     try:
         completed = subprocess.run(
             [str(executable), option],
             check=False,
             capture_output=True,
+            env=toolchain_environment(installation),
             text=True,
             timeout=_PROBE_TIMEOUT_SECONDS,
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         raise EvmError(f"cannot run {executable}: {error}") from error
     output = f"{completed.stdout}\n{completed.stderr}"
+    if completed.returncode != 0:
+        details = output.strip() or f"exit status {completed.returncode}"
+        guidance = _probe_failure_guidance(installation)
+        raise EvmError(f"compiler is not usable: {executable}: {details}{guidance}")
     match = _VERSION_RE.search(output)
     if match is None:
         raise EvmError(f"compiler did not report a numeric version: {executable}")
     return match.group(0)
+
+
+def _probe_failure_guidance(installation: ToolchainInstallation) -> str:
+    if installation.provider != "ise" or installation.platform.operating_system != "macos":
+        return ""
+    guidance = (
+        f"; install XQuartz, then install the EiffelStudio dependencies with MacPorts: "
+        f"`{_ISE_MACOS_DEPENDENCY_COMMAND}`"
+    )
+    if shutil.which("port") is None:
+        guidance += f"; MacPorts is not installed; install it from {_MACPORTS_INSTALL_URL}"
+    return guidance
 
 
 def _toolchain_path_entries(

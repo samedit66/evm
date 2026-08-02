@@ -536,6 +536,88 @@ def test_verify_reports_missing_and_changed_compiler(tmp_path: Path) -> None:
     assert "cannot run" in "\n".join(verify_installation(changed))
 
 
+def test_verify_rejects_failed_macos_ise_probe_with_prerequisites(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    platform = current_toolchain_platform("Darwin", "arm64")
+    root = tmp_path / "ise"
+    executable = root / "studio" / "spec" / platform.ise_platform / "bin" / "ec"
+    executable.parent.mkdir(parents=True)
+    executable.write_text(
+        "#!/bin/sh\necho 'Library not loaded: /opt/local/lib/libiconv.2.dylib' >&2\nexit 134\n"
+    )
+    executable.chmod(0o755)
+    installation = ToolchainInstallation(
+        "ise",
+        "25.12",
+        "25.12.98922",
+        platform,
+        root,
+        executable,
+        InstallationKind.MANAGED,
+    )
+    monkeypatch.setattr("evm.toolchain.store.shutil.which", lambda name: None)
+
+    diagnostics = "\n".join(verify_installation(installation))
+
+    assert "compiler is not usable" in diagnostics
+    assert "/opt/local/lib/libiconv.2.dylib" in diagnostics
+    assert "sudo port install pkgconfig bzip2 xorg-libXtst gtk3 adwaita-icon-theme" in diagnostics
+    assert "https://www.macports.org/install.php" in diagnostics
+
+
+def test_verify_omits_macports_installation_link_when_port_exists(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    platform = current_toolchain_platform("Darwin", "arm64")
+    root = tmp_path / "ise"
+    executable = root / "studio" / "spec" / platform.ise_platform / "bin" / "ec"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("#!/bin/sh\nexit 1\n")
+    executable.chmod(0o755)
+    installation = ToolchainInstallation(
+        "ise",
+        "25.12",
+        "25.12.98922",
+        platform,
+        root,
+        executable,
+        InstallationKind.MANAGED,
+    )
+    monkeypatch.setattr("evm.toolchain.store.shutil.which", lambda name: "/opt/local/bin/port")
+
+    diagnostics = "\n".join(verify_installation(installation))
+
+    assert "sudo port install" in diagnostics
+    assert "MacPorts is not installed" not in diagnostics
+
+
+def test_verify_probes_compiler_in_toolchain_environment(tmp_path: Path) -> None:
+    platform = current_toolchain_platform("Darwin", "arm64")
+    root = tmp_path / "ise"
+    executable = root / "studio" / "spec" / platform.ise_platform / "bin" / "ec"
+    executable.parent.mkdir(parents=True)
+    executable.write_text(
+        "#!/bin/sh\n"
+        f'test "$ISE_EIFFEL" = "{root}" || exit 2\n'
+        "echo 'ISE EiffelStudio version 25.12.98922'\n"
+    )
+    executable.chmod(0o755)
+    installation = ToolchainInstallation(
+        "ise",
+        "25.12",
+        "25.12.98922",
+        platform,
+        root,
+        executable,
+        InstallationKind.MANAGED,
+    )
+
+    assert verify_installation(installation) == ()
+
+
 def test_verify_runs_liberty_in_managed_environment(tmp_path: Path) -> None:
     root = tmp_path / "liberty"
     executable = root / "target" / "bin" / "se"
