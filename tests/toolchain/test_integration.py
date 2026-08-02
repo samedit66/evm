@@ -87,7 +87,7 @@ def test_real_distribution_library_is_locked_and_materialized(
 def test_calculator_autotest_example_runs_with_ise(tmp_path: Path) -> None:
     if shutil.which("ec") is None:
         pytest.skip("ec is not installed")
-    source = Path(__file__).parents[1] / "examples" / "calculator_autotest"
+    source = Path(__file__).parents[2] / "examples" / "calculator_autotest"
     example = tmp_path / "calculator_autotest"
     shutil.copytree(source, example)
     project = load_manifest(example / "Eiffel.toml")
