@@ -207,6 +207,7 @@ def prepare_build_directory(
     ) and directory.exists():
         shutil.rmtree(directory)
     directory.mkdir(parents=True, exist_ok=True)
+    compiler_adapter(toolchain.adapter).prepare_build(toolchain, project, request, directory)
     return directory
 
 

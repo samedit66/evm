@@ -176,6 +176,9 @@ def toolchain_environment(
         environment["ISE_EIFFEL"] = str(installation.root)
         environment["ISE_LIBRARY"] = str(installation.root)
         environment["ISE_PLATFORM"] = installation.platform.ise_platform
+    elif installation.provider == "liberty":
+        environment["HOME"] = str(installation.root / ".home")
+        environment["LIBERTY_HOME"] = str(installation.root)
     return environment
 
 
@@ -233,7 +236,7 @@ def verify_installation(installation: ToolchainInstallation) -> tuple[str, ...]:
             gobo_shell_root(installation)
         except EvmError as error:
             diagnostics.append(str(error))
-    if installation.provider == "serpent":
+    if installation.provider in {"liberty", "serpent"}:
         return tuple(diagnostics)
     try:
         detected_version = _probe_version(installation.provider, installation.executable)
@@ -402,6 +405,8 @@ def _toolchain_path_entries(
         return [str((effective_root or installation.root) / "bin")]
     if installation.provider == "serpent":
         return [str(installation.executable.parent)]
+    if installation.provider == "liberty":
+        return [str(installation.root / "target" / "bin")]
     root = installation.root
     platform = installation.platform.ise_platform
     return [

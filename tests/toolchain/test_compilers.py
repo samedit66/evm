@@ -19,12 +19,12 @@ from evm.versioning import NumericVersion
 
 
 def test_registry_preserves_automatic_selection_priority() -> None:
-    assert compiler_adapter_names() == ("ise", "gobo", "serpent")
+    assert compiler_adapter_names() == ("ise", "gobo", "serpent", "liberty")
     assert automatic_compiler_adapter_names() == ("ise", "gobo")
 
 
 def test_registry_rejects_unknown_adapter() -> None:
-    with pytest.raises(EvmError, match="known adapters: ise, gobo, serpent"):
+    with pytest.raises(EvmError, match="known adapters: ise, gobo, serpent, liberty"):
         compiler_adapter("unknown")
 
 
@@ -79,3 +79,25 @@ def test_serpent_adapter_rejects_unsupported_capabilities(tmp_path: Path) -> Non
     error = compiler_adapter("serpent").compatibility_error(project)
 
     assert error == "Serpent does not support the requested concurrency capability"
+
+
+def test_liberty_adapter_generates_ace_configuration(tmp_path: Path) -> None:
+    project = create_project(ProjectCreationRequest(tmp_path / "hello"))
+    toolchain = Toolchain(
+        "liberty",
+        Path("/tools/se"),
+        NumericVersion.parse("0.0"),
+        "explicit",
+        "test",
+        "21b0813",
+    )
+    directory = project.directory / "build" / "liberty"
+    directory.mkdir(parents=True)
+
+    compiler_adapter("liberty").prepare_build(toolchain, project, BuildRequest(), directory)
+    ace = (directory / "hello.ace").read_text()
+
+    assert 'system\n   "hello"' in ace
+    assert "root\n   APPLICATION: make" in ace
+    assert str(project.directory / "src") in ace
+    assert '"${path_liberty_core}/loadpath.se"' in ace

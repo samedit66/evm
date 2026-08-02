@@ -39,6 +39,8 @@ _GOBO_RELEASES_URL = "https://api.github.com/repos/gobo-eiffel/gobo/releases"
 _SERPENT_COMMIT_URL = "https://api.github.com/repos/samedit66/serpent/commits/main"
 _SERPENT_ARCHIVE_URL = "https://github.com/samedit66/serpent/archive/{revision}.zip"
 _SERPENT_VERSION = "0.1.0"
+_LIBERTY_REPOSITORY = "https://git.savannah.gnu.org/git/liberty-eiffel.git"
+_LIBERTY_VERSION = "0.0"
 _EIFFEL_INSTALL_SCRIPT_URL = "https://www.eiffel.org/setup/install.sh"
 _EIFFEL_CDN_URL = "https://www.eiffel.com/cdn/EiffelStudio"
 _EIFFEL_ARCHIVE_URL = "https://ftp.eiffel.com/pub/download"
@@ -53,6 +55,8 @@ def available_artifacts(
     platform: ToolchainPlatform | None = None,
 ) -> tuple[ToolchainArtifact, ...]:
     current_platform = platform or current_toolchain_platform()
+    if provider == "liberty":
+        return (_liberty_artifact("latest", current_platform),)
     with _catalog_client(client) as catalog:
         if provider == "gobo":
             return _gobo_artifacts(catalog, current_platform)
@@ -68,6 +72,8 @@ def resolve_artifact(
     client: httpx.Client | None = None,
     platform: ToolchainPlatform | None = None,
 ) -> ToolchainArtifact:
+    if selector.provider == "liberty":
+        return _liberty_artifact(selector.requested_version, platform)
     if selector.provider == "serpent" and selector.requested_version != "latest":
         return _serpent_revision_artifact(selector.requested_version, platform)
     artifacts = available_artifacts(selector.provider, client, platform)
@@ -88,6 +94,8 @@ def install_toolchain(
     client: httpx.Client | None = None,
     platform: ToolchainPlatform | None = None,
 ) -> ToolchainInstallation:
+    if selector.provider == "liberty":
+        return _install_liberty(selector, offline, platform)
     artifact = _resolve_install_artifact(selector, offline, client, platform)
     destination = managed_installation_directory(
         artifact.provider, artifact.revision, artifact.platform
@@ -108,6 +116,8 @@ def install_locked_toolchain(
     offline: bool = False,
     client: httpx.Client | None = None,
 ) -> ToolchainInstallation:
+    if locked.provider == "liberty":
+        return _install_liberty(ToolchainSelector("liberty", locked.revision), offline, None)
     platform = current_toolchain_platform()
     if (locked.platform, locked.architecture) != (
         platform.operating_system,
@@ -202,6 +212,104 @@ def _serpent_revision_artifact(
         _SERPENT_ARCHIVE_URL.format(revision=revision),
         f"serpent-{revision}.zip",
     )
+
+
+def _liberty_artifact(
+    requested_revision: str,
+    platform: ToolchainPlatform | None,
+) -> ToolchainArtifact:
+    revision = _resolve_liberty_revision() if requested_revision == "latest" else requested_revision
+    if re.fullmatch(r"[0-9a-f]{7,40}", revision) is None:
+        raise EvmError("Liberty selectors must use latest or a 7-40 character Git commit")
+    return ToolchainArtifact(
+        "liberty",
+        _LIBERTY_VERSION,
+        revision,
+        platform or current_toolchain_platform(),
+        f"{_LIBERTY_REPOSITORY}#{revision}",
+        f"liberty-{revision}.git",
+    )
+
+
+def _resolve_liberty_revision() -> str:
+    try:
+        completed = subprocess.run(
+            ["git", "ls-remote", _LIBERTY_REPOSITORY, "refs/heads/master"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError as error:
+        raise EvmError(f"cannot query Liberty repository: {error}") from error
+    revision = completed.stdout.partition("\t")[0].strip()
+    if completed.returncode != 0 or re.fullmatch(r"[0-9a-f]{40}", revision) is None:
+        details = completed.stderr.strip() or "master revision was not reported"
+        raise EvmError(f"cannot resolve Liberty latest revision: {details}")
+    return revision
+
+
+def _install_liberty(
+    selector: ToolchainSelector,
+    offline: bool,
+    platform: ToolchainPlatform | None,
+) -> ToolchainInstallation:
+    artifact = _liberty_artifact(selector.requested_version, platform)
+    destination = managed_installation_directory(
+        artifact.provider, artifact.revision, artifact.platform
+    )
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with FileLock(str(destination) + ".lock"):
+        existing = _existing_installation(destination)
+        if existing is not None:
+            return existing
+        if offline:
+            raise EvmError("Liberty cannot be installed offline without an existing checkout")
+        return _bootstrap_liberty(artifact, destination)
+
+
+def _bootstrap_liberty(
+    artifact: ToolchainArtifact,
+    destination: Path,
+) -> ToolchainInstallation:
+    missing_tools = [name for name in ("git", "bash", "gcc", "g++") if shutil.which(name) is None]
+    if missing_tools:
+        raise EvmError(f"Liberty build tools were not found: {', '.join(missing_tools)}")
+    root = destination / "root"
+    try:
+        destination.mkdir()
+        root.mkdir()
+        _run_install_command(["git", "init", str(root)])
+        _run_install_command(
+            ["git", "-C", str(root), "remote", "add", "origin", _LIBERTY_REPOSITORY]
+        )
+        _run_install_command(
+            ["git", "-C", str(root), "fetch", "--depth", "1", "origin", artifact.revision]
+        )
+        _run_install_command(["git", "-C", str(root), "checkout", "--detach", "FETCH_HEAD"])
+        home = root / ".home"
+        home.mkdir()
+        environment = os.environ.copy()
+        environment.update({"HOME": str(home), "CC": "gcc", "CXX": "g++"})
+        _run_install_command(
+            ["bash", str(root / "install.sh"), "-bootstrap", "-plain"],
+            working_directory=root,
+            environment=environment,
+        )
+        installation = ToolchainInstallation(
+            artifact.provider,
+            artifact.version,
+            artifact.revision,
+            artifact.platform,
+            root,
+            root / "target" / "bin" / executable_name("liberty"),
+            InstallationKind.MANAGED,
+            source=artifact.url,
+        )
+        save_managed_installation(installation)
+        return installation
+    except (EvmError, OSError):
+        shutil.rmtree(destination, ignore_errors=True)
+        raise
 
 
 def _gobo_release_artifact(
@@ -390,9 +498,21 @@ def _install_serpent_distribution(
     return installation
 
 
-def _run_install_command(command: list[str]) -> None:
+def _run_install_command(
+    command: list[str],
+    *,
+    working_directory: Path | None = None,
+    environment: Mapping[str, str] | None = None,
+) -> None:
     try:
-        completed = subprocess.run(command, check=False, capture_output=True, text=True)
+        completed = subprocess.run(
+            command,
+            cwd=working_directory,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
     except OSError as error:
         raise EvmError(f"cannot run {' '.join(command)}: {error}") from error
     if completed.returncode != 0:

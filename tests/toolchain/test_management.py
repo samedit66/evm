@@ -576,6 +576,34 @@ def test_serpent_install_creates_isolated_python_environment(
     assert list_installations() == (installation,)
 
 
+def test_liberty_install_bootstraps_exact_git_revision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    revision = "21b081378ec12798080128e7f39878d5d2097cb7"
+    monkeypatch.setenv("EVM_TOOLCHAIN_HOME", str(tmp_path / "store"))
+    monkeypatch.setattr(
+        "evm.toolchain.installation.shutil.which",
+        lambda name: f"/tools/{name}",
+    )
+
+    def run_install(command: list[str], **options: object) -> None:
+        if command[0] == "bash":
+            root = Path(options["working_directory"])
+            executable = root / "target" / "bin" / "se"
+            executable.parent.mkdir(parents=True)
+            executable.write_text("se")
+
+    monkeypatch.setattr("evm.toolchain.installation._run_install_command", run_install)
+
+    installation = install_toolchain(ToolchainSelector.parse(f"liberty@{revision}"))
+
+    assert installation.provider == "liberty"
+    assert installation.revision == revision
+    assert installation.executable == installation.root / "target" / "bin" / "se"
+    assert (installation.root / ".home").is_dir()
+
+
 def test_catalog_reports_unknown_provider_and_missing_release() -> None:
     platform = current_toolchain_platform("Linux", "x86_64")
     with pytest.raises(EvmError, match="unknown toolchain provider"):
@@ -1017,7 +1045,7 @@ def test_toolchain_cli_lists_available_releases_in_text_and_json(
 
     assert "gobo@26.06" in text_result.output
     assert json.loads(json_result.output)["toolchains"][0]["revision"] == "26.06.30"
-    assert calls == ["ise", "gobo", "serpent", "gobo"]
+    assert calls == ["ise", "gobo", "serpent", "liberty", "gobo"]
 
 
 def test_toolchain_cli_lists_empty_and_text_installations(

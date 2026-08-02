@@ -39,10 +39,7 @@ def configure_project_toolchains(
     if not selectors:
         raise EvmError("at least one toolchain selector is required")
     artifacts = tuple(resolve_artifact(selector, client) for selector in selectors)
-    exact_selectors = tuple(
-        f"{item.provider}@{item.revision if item.provider == 'serpent' else item.version}"
-        for item in artifacts
-    )
+    exact_selectors = tuple(_exact_selector(item) for item in artifacts)
     if len(exact_selectors) != len(set(exact_selectors)):
         raise EvmError("toolchain matrix resolves to duplicate releases")
     document = _load_manifest_document(project.manifest_path)
@@ -70,6 +67,11 @@ def project_toolchain_selectors(project: Project) -> tuple[ToolchainSelector, ..
             "project does not configure a toolchain matrix; run `evm toolchain use PROVIDER`"
         )
     return tuple(ToolchainSelector.parse(item) for item in project.toolchain.matrix)
+
+
+def _exact_selector(artifact: ToolchainArtifact) -> str:
+    version = artifact.revision if artifact.provider in {"liberty", "serpent"} else artifact.version
+    return f"{artifact.provider}@{version}"
 
 
 def locked_toolchains_for_current_platform(lock: LockFile) -> tuple[LockedToolchain, ...]:

@@ -556,9 +556,11 @@ def _exact_toolchain_selector(value: str) -> ToolchainSelector:
     selector = ToolchainSelector.parse(value)
     if selector.version is None or selector.version in {"latest", "beta", "nightly"}:
         raise EvmError(f"project toolchain selector must contain an exact numeric version: {value}")
-    if selector.provider == "serpent":
+    if selector.provider in {"liberty", "serpent"}:
         if re.fullmatch(r"[0-9a-f]{7,40}", selector.version) is None:
-            raise EvmError(f"project Serpent selector must contain an exact Git commit: {value}")
+            raise EvmError(
+                f"project {selector.provider} selector must contain an exact Git commit: {value}"
+            )
     else:
         NumericVersion.parse(selector.version)
     return selector
@@ -576,9 +578,11 @@ def _validate_toolchain_compatibility(
     )
     if requirement is None:
         raise EvmError(f"toolchain {selector} is not allowed by compatibility.compilers")
-    if selector.provider == "serpent":
+    if selector.provider in {"liberty", "serpent"}:
         if requirement.constraint is not None:
-            raise EvmError("Serpent compatibility does not support version constraints")
+            raise EvmError(
+                f"{selector.provider} compatibility does not support version constraints"
+            )
         return
     if not satisfies(NumericVersion.parse(selector.version or ""), requirement.constraint):
         raise EvmError(

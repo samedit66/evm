@@ -35,6 +35,15 @@ class CompilerAdapter(Protocol):
 
     name: str
 
+    def prepare_build(
+        self,
+        toolchain: CompilerToolchain,
+        project: Project,
+        request: BuildRequest,
+        directory: Path,
+    ) -> None:
+        """Prepare compiler-specific generated input in the build directory."""
+
     def compiler_command(
         self,
         toolchain: CompilerToolchain,
@@ -72,6 +81,15 @@ class IseCompilerAdapter:
     """Map EVM operations to the ISE EiffelStudio command-line compiler."""
 
     name = "ise"
+
+    def prepare_build(
+        self,
+        toolchain: CompilerToolchain,
+        project: Project,
+        request: BuildRequest,
+        directory: Path,
+    ) -> None:
+        return None
 
     def compiler_command(
         self,
@@ -144,6 +162,15 @@ class GoboCompilerAdapter:
 
     name = "gobo"
 
+    def prepare_build(
+        self,
+        toolchain: CompilerToolchain,
+        project: Project,
+        request: BuildRequest,
+        directory: Path,
+    ) -> None:
+        return None
+
     def compiler_command(
         self,
         toolchain: CompilerToolchain,
@@ -205,6 +232,15 @@ class SerpentCompilerAdapter:
     """Compile the Serpent Eiffel subset to JVM class files."""
 
     name = "serpent"
+
+    def prepare_build(
+        self,
+        toolchain: CompilerToolchain,
+        project: Project,
+        request: BuildRequest,
+        directory: Path,
+    ) -> None:
+        return None
 
     def compiler_command(
         self,
@@ -274,10 +310,85 @@ class SerpentCompilerAdapter:
         return None
 
 
+class LibertyCompilerAdapter:
+    """Compile applications with the Liberty Eiffel ``se c`` frontend."""
+
+    name = "liberty"
+
+    def prepare_build(
+        self,
+        toolchain: CompilerToolchain,
+        project: Project,
+        request: BuildRequest,
+        directory: Path,
+    ) -> None:
+        root = _effective_root(project, request.target)
+        if root is None:
+            raise EvmError("Liberty run requires an application root")
+        clusters = "\n".join(
+            f'   "{path.as_posix()}"'
+            for path in _effective_source_directories(project, request.target)
+        )
+        assertion = "boost" if request.release else "all_check"
+        ace = (
+            f'system\n   "{project.name}"\n\n'
+            f"root\n   {root.class_name}: {root.feature}\n\n"
+            f"default\n   assertion ({assertion});\n\n"
+            f'cluster\n{clusters}\n   "${{path_liberty_core}}/loadpath.se"\n\nend\n'
+        )
+        (directory / f"{project.name}.ace").write_text(ace, encoding="utf-8")
+
+    def compiler_command(
+        self,
+        toolchain: CompilerToolchain,
+        project: Project,
+        request: BuildRequest,
+        check_only: bool = False,
+    ) -> list[str]:
+        if check_only:
+            raise EvmError("Liberty does not support configuration-only checks")
+        ace = build_directory(toolchain, project, request) / f"{project.name}.ace"
+        return [str(toolchain.executable), "c", str(ace)]
+
+    def artifact_candidates(
+        self,
+        toolchain: CompilerToolchain,
+        project: Project,
+        request: BuildRequest,
+    ) -> tuple[Path, ...]:
+        suffix = ".exe" if os.name == "nt" else ""
+        return (build_directory(toolchain, project, request) / f"{project.name}{suffix}",)
+
+    def run_command(
+        self,
+        toolchain: CompilerToolchain,
+        project: Project,
+        request: BuildRequest,
+        arguments: tuple[str, ...],
+    ) -> list[str]:
+        return _native_run_command(self.artifact_candidates(toolchain, project, request), arguments)
+
+    def legacy_ecf_variables(self, toolchain: CompilerToolchain) -> Mapping[str, Path]:
+        return {}
+
+    def compatibility_error(self, project: Project) -> str | None:
+        if project.kind != "application":
+            return "Liberty currently supports application projects only"
+        requirements = dict(project.requires)
+        if requirements.get("standard") == "ise" or "ise-semantics" in requirements:
+            return "Liberty does not support ISE language semantics"
+        if requirements.get("concurrency") not in {None, "none"}:
+            return "Liberty does not support the requested concurrency capability"
+        if requirements.get("void-safety") not in {None, "none"}:
+            return "Liberty does not support the requested void-safety capability"
+        return None
+
+
 _COMPILER_ADAPTERS: dict[str, CompilerAdapter] = {
     "ise": IseCompilerAdapter(),
     "gobo": GoboCompilerAdapter(),
     "serpent": SerpentCompilerAdapter(),
+    "liberty": LibertyCompilerAdapter(),
 }
 
 
@@ -296,6 +407,7 @@ _ADAPTER_METADATA = {
     "ise": CompilerAdapterMetadata("ise", "ISE EiffelStudio", "ec", ("-version",), True),
     "gobo": CompilerAdapterMetadata("gobo", "Gobo Eiffel", "gec", ("--version",), True),
     "serpent": CompilerAdapterMetadata("serpent", "Serpent Eiffel", "serpent", ()),
+    "liberty": CompilerAdapterMetadata("liberty", "Liberty Eiffel", "se", ("-version",)),
 }
 
 
